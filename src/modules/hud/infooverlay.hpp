@@ -3,6 +3,7 @@
 #include "../Module.hpp"
 #include <bedrocktools/sdk/Types.hpp>
 #include <chrono>
+#include <deque>
 #include <string>
 
 class InfoOverlayModule : public Module {
@@ -20,6 +21,10 @@ public:
     // Called from the RaknetUpdate hook installed by this module.
     void updatePing(int ping);
 
+    // Called from the GetDestroyProgress hook installed by this module.
+    // Tracks completed block breaks to derive a rolling blocks-per-second rate.
+    void trackBlockProgress(void* block, float increment);
+
     int m_ping = 0;
 
 private:
@@ -36,6 +41,7 @@ private:
     float m_iconSize = 34.0f;
     float m_iconGap = 10.0f;
     float m_panelSpacing = 8.0f;
+    float m_segmentGap = 20.0f; // gap consumed by the "• " divider between merged segments
 
     // Purple glass styling ---------------------------------------------------
     bool m_background = true;
@@ -54,6 +60,7 @@ private:
     bool m_showFps = true;
     bool m_showPing = true;
     bool m_showCoords = true;
+    bool m_showBps = true;
 
     int m_fps = 0;
     int m_frameAccumulator = 0;
@@ -62,4 +69,13 @@ private:
     bedrocktools::sdk::Vec3 m_currentPos{0.f, 0.f, 0.f};
 
     bool m_pingHooked = false;
+
+    // Blocks-per-second tracking ----------------------------------------------
+    bool m_breakHooked = false;
+    void* m_breakBlock = nullptr;
+    float m_breakProgress = 0.0f;
+    std::chrono::steady_clock::time_point m_breakLastUpdate{};
+    std::deque<std::chrono::steady_clock::time_point> m_breakTimestamps;
+    float m_bps = 0.0f;
+    static constexpr float kBpsWindowSeconds = 5.0f;
 };
