@@ -10,6 +10,8 @@
 #include "hud/reachcounter.hpp"
 #include "hud/breakindicator.hpp"
 #include "hud/playercoords.hpp"
+#include "hud/infooverlay.hpp"
+#include "hud/activeeffects.hpp"
 #include "hud/compass.hpp"
 #include "player/timechanger.hpp"
 #include "player/autosprint.hpp"
@@ -91,6 +93,8 @@ void registerAllModules() {
     registry.emplace<ComboDisplay>();
     registry.emplace<BreakIndicatorModule>();
     registry.emplace<PlayerCoordsModule>();
+    registry.emplace<InfoOverlayModule>();
+    registry.emplace<ActiveEffectsModule>();
     registry.emplace<CompassModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<AutoSprintModule>();
