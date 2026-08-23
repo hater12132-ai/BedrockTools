@@ -1,9 +1,8 @@
-// targethud.cpp
-
 #include "targethud.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include <fmt/format.h>
@@ -11,10 +10,6 @@
 namespace bedrocktools::modules::hud {
 
 namespace {
-
-// -----------------------------------------------------------------------
-// Entity helpers
-// -----------------------------------------------------------------------
 
 std::string getEntityDisplayName(
     entt::registry& registry,
@@ -80,10 +75,6 @@ bool isLocalPlayer(
     >(entity);
 }
 
-// -----------------------------------------------------------------------
-// Simple ray/sphere intersection
-// -----------------------------------------------------------------------
-
 bool rayIntersectsSphere(
     const glm::vec3& rayOrigin,
     const glm::vec3& rayDirection,
@@ -127,10 +118,6 @@ bool rayIntersectsSphere(
 
 } // namespace
 
-// -----------------------------------------------------------------------
-// Constructor / destructor
-// -----------------------------------------------------------------------
-
 TargetHud::TargetHud()
     : Module(
           "TargetHud",
@@ -145,10 +132,6 @@ TargetHud::TargetHud()
 
 TargetHud::~TargetHud() = default;
 
-// -----------------------------------------------------------------------
-// Enable / disable
-// -----------------------------------------------------------------------
-
 void TargetHud::onEnable() {
     m_currentTarget.reset();
     m_tickListener.subscribe();
@@ -158,10 +141,6 @@ void TargetHud::onDisable() {
     m_tickListener.unsubscribe();
     m_currentTarget.reset();
 }
-
-// -----------------------------------------------------------------------
-// Local player tick
-// -----------------------------------------------------------------------
 
 void TargetHud::onLocalPlayerTick(
     bedrocktools::events::LocalPlayerTickEvent& event
@@ -189,10 +168,6 @@ void TargetHud::onLocalPlayerTick(
         );
 }
 
-// -----------------------------------------------------------------------
-// Find entity under crosshair
-// -----------------------------------------------------------------------
-
 std::optional<TargetInfo>
 TargetHud::findTargetedEntity(
     entt::registry& registry,
@@ -200,7 +175,6 @@ TargetHud::findTargetedEntity(
     const glm::vec3& lookDirection,
     float maxDistance
 ) const {
-
     constexpr float kEntityHitRadius = 0.9f;
 
     std::optional<TargetInfo> bestTarget;
@@ -213,7 +187,6 @@ TargetHud::findTargetedEntity(
 
     for (auto entity : view) {
 
-        // Don't target ourselves.
         if (isLocalPlayer(registry, entity)) {
             continue;
         }
@@ -245,7 +218,6 @@ TargetHud::findTargetedEntity(
                 entity
             );
 
-        // Ignore entities without valid health.
         if (maxHealth <= 0.0f) {
             continue;
         }
@@ -253,6 +225,7 @@ TargetHud::findTargetedEntity(
         TargetInfo target;
 
         target.entity = entity;
+
         target.uniqueId =
             getEntityUniqueId(
                 registry,
@@ -276,12 +249,7 @@ TargetHud::findTargetedEntity(
     return bestTarget;
 }
 
-// -----------------------------------------------------------------------
-// Per-frame update
-// -----------------------------------------------------------------------
-
 void TargetHud::onFrame() {
-
     if (!m_currentTarget.has_value()) {
         return;
     }
@@ -291,14 +259,9 @@ void TargetHud::onFrame() {
     );
 }
 
-// -----------------------------------------------------------------------
-// HUD rendering
-// -----------------------------------------------------------------------
-
 void TargetHud::drawTargetOverlay(
     const TargetInfo& target
 ) const {
-
     const std::string cacheKey =
         fmt::format(
             "targethud_{:x}",
@@ -317,12 +280,9 @@ void TargetHud::drawTargetOverlay(
     const float filledWidth =
         barWidth * healthFraction;
 
-    const std::string fillColorHex =
-        barColorHex;
-
     std::vector<pl::modmenu::DrawCommand> commands;
 
-    // Background.
+    // Background
     commands.push_back(
         pl::modmenu::DrawCommand::rect(
             hudPosX,
@@ -334,7 +294,7 @@ void TargetHud::drawTargetOverlay(
         )
     );
 
-    // Health fill.
+    // Health bar
     if (filledWidth > 0.0f) {
         commands.push_back(
             pl::modmenu::DrawCommand::rect(
@@ -342,13 +302,13 @@ void TargetHud::drawTargetOverlay(
                 hudPosY,
                 filledWidth,
                 barHeight,
-                fillColorHex,
+                barColorHex,
                 cacheKey + "_fill"
             )
         );
     }
 
-    // Gamertag.
+    // Gamertag
     commands.push_back(
         pl::modmenu::DrawCommand::text(
             hudPosX,
@@ -359,7 +319,7 @@ void TargetHud::drawTargetOverlay(
         )
     );
 
-    // Player head.
+    // Player head
     commands.push_back(
         pl::modmenu::DrawCommand::playerHead(
             hudPosX - 18.0f,
