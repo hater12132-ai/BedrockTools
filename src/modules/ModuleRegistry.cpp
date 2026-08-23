@@ -12,6 +12,7 @@
 #include "hud/playercoords.hpp"
 #include "hud/infooverlay.hpp"
 #include "hud/activeeffects.hpp"
+#include "hud/targethud.hpp"
 #include "hud/compass.hpp"
 #include "player/timechanger.hpp"
 #include "player/autosprint.hpp"
@@ -95,6 +96,7 @@ void registerAllModules() {
     registry.emplace<PlayerCoordsModule>();
     registry.emplace<InfoOverlayModule>();
     registry.emplace<ActiveEffectsModule>();
+    registry.emplace<TargetHudModule>();
     registry.emplace<CompassModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<AutoSprintModule>();
