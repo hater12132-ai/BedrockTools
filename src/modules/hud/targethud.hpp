@@ -30,7 +30,7 @@
 // -----------------------------------------------------------------------
 
 #include <bedrocktools/BedrockTools.hpp>
-#include <bedrocktools/Module.hpp>
+#include "../Module.hpp"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
