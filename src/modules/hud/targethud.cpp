@@ -14,7 +14,7 @@ std::string getEntityDisplayName(
     entt::entity entity
 ) {
     if (auto* nameTag =
-            registry.try_get<bedrocktools::components::NameTag>(entity)) {
+            registry.try_get<components::NameTag>(entity)) {
         return nameTag->text;
     }
     return "Unknown";
@@ -25,7 +25,7 @@ std::pair<float, float> getEntityHealth(
     entt::entity entity
 ) {
     if (auto* health =
-            registry.try_get<bedrocktools::components::Health>(entity)) {
+            registry.try_get<components::Health>(entity)) {
         return {health->current, health->max};
     }
     return {0.0f, 0.0f};
@@ -36,7 +36,7 @@ glm::vec3 getEntityEyePosition(
     entt::entity entity
 ) {
     if (auto* transform =
-            registry.try_get<bedrocktools::components::Transform>(entity)) {
+            registry.try_get<components::Transform>(entity)) {
         return transform->position +
             glm::vec3{
                 0.0f,
@@ -52,7 +52,7 @@ std::uint64_t getEntityUniqueId(
     entt::entity entity
 ) {
     if (auto* idComp =
-            registry.try_get<bedrocktools::components::UniqueId>(entity)) {
+            registry.try_get<components::UniqueId>(entity)) {
         return idComp->value;
     }
     return static_cast<std::uint64_t>(
@@ -65,7 +65,7 @@ bool isLocalPlayer(
     entt::entity entity
 ) {
     return registry.all_of<
-        bedrocktools::components::LocalPlayerTag
+        components::LocalPlayerTag
     >(entity);
 }
 
@@ -78,7 +78,7 @@ std::string getEntityCategoryLabel(
     entt::registry& registry,
     entt::entity entity
 ) {
-    if (registry.all_of<bedrocktools::components::PlayerTag>(entity)) {
+    if (registry.all_of<components::PlayerTag>(entity)) {
         return "A Player";
     }
     return "An Entity";
@@ -189,7 +189,7 @@ TargetHudModule::findTargetedEntity(
 
     auto view =
         registry.view<
-            bedrocktools::components::Transform
+            components::Transform
         >();
 
     for (auto entity : view) {
