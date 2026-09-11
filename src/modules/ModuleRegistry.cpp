@@ -4,6 +4,7 @@
 #include "visual/fpsunlocker.hpp"
 #include "visual/fogcolor.hpp"
 #include "visual/glintcolor.hpp"
+#include "visual/hitoutline.hpp"
 #include "visual/tnttimer.hpp"
 #include "visual/nofog.hpp"
 #include "hud/pingcounter.hpp"
@@ -92,6 +93,7 @@ void registerAllModules() {
     registry.emplace<MotionBlurModule>();
     registry.emplace<FogColorModule>();
     registry.emplace<GlintColorModule>();
+    registry.emplace<HitOutlineModule>();
     registry.emplace<TntTimerModule>();
     registry.emplace<NoFogModule>();
     registry.emplace<PingCounterModule>();

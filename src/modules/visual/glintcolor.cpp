@@ -1,4 +1,5 @@
 #include "glintcolor.hpp"
+#include "hitoutline.hpp"
 
 #include "core/memory/Hooks.hpp"
 #include <bedrocktools/memory/Signatures.hpp>
@@ -201,6 +202,33 @@ void setupActorShaderParametersGlintHook(
     const void* lightEmissionColor
 ) {
     if (!g_setupActorShaderParametersGlintOriginal) return;
+
+    // Hit Outline takes priority over the glint recolor when this specific
+    // entity was hit recently - `overlay` is the same tint channel vanilla
+    // uses for the hurt-flash, so it stays properly depth-tested/occluded
+    // (this is the normal per-actor draw call, not a separate ESP pass).
+    Color hitOutline{};
+    if (g_hitOutlineInstance && g_hitOutlineInstance->shouldOutline(entityContext, hitOutline)) {
+        g_setupActorShaderParametersGlintOriginal(
+            screenContext,
+            entityContext,
+            actor,
+            &hitOutline,
+            changeColor,
+            changeColor2,
+            glintColor,
+            uvOffset1,
+            uvOffset2,
+            uvRot1,
+            uvRot2,
+            glintUVScale,
+            uvAnim,
+            br,
+            lightEmission,
+            lightEmissionColor
+        );
+        return;
+    }
 
     if (g_glintColor && g_glintColor->enabled) {
         const Color custom = makeGlintColor();
