@@ -40,9 +40,11 @@ void HitOutlineModule::onInit() {
         [this](auto& event) {
             HITOUTLINE_LOG("AttackEvent fired, target=%p", static_cast<void*>(event.target));
             if (!enabled || !event.target) return;
-            void* ctx = event.target->entityContext();
-            HITOUTLINE_LOG("tracking hit, entityContext=%p, enabled=%d", ctx, enabled);
-            trackHit(ctx);
+            // Key by the raw Actor* itself now, not entityContext() - see the
+            // header comment for why (this was the likely bug on 1.26.45).
+            void* actorPtr = static_cast<void*>(event.target);
+            HITOUTLINE_LOG("tracking hit, actorPtr=%p, enabled=%d", actorPtr, enabled);
+            trackHit(actorPtr);
         }
     );
 
@@ -58,9 +60,9 @@ void HitOutlineModule::onFrame() {
     const std::int64_t t = nowMs();
     bool anyActive = false;
     for (auto& hit : m_hits) {
-        if (hit.entityContext) {
+        if (hit.actorPtr) {
             if (hit.expiresAtMs <= t) {
-                hit.entityContext = nullptr;
+                hit.actorPtr = nullptr;
             } else {
                 anyActive = true;
             }
@@ -100,15 +102,15 @@ void HitOutlineModule::drawDebugBanner() {
     submitDrawCommands(moduleId, cmds);
 }
 
-void HitOutlineModule::trackHit(void* entityContext) {
-    if (!entityContext) return;
+void HitOutlineModule::trackHit(void* actorPtr) {
+    if (!actorPtr) return;
 
     const std::int64_t expiresAt = nowMs() + m_durationMs.load(std::memory_order_relaxed);
 
     // Refresh if this entity is already tracked (e.g. hitting the same cow
     // repeatedly - don't burn a new slot every swing).
     for (auto& hit : m_hits) {
-        if (hit.entityContext == entityContext) {
+        if (hit.actorPtr == actorPtr) {
             hit.expiresAtMs = expiresAt;
             return;
         }
@@ -116,17 +118,17 @@ void HitOutlineModule::trackHit(void* entityContext) {
 
     // Otherwise take the next ring-buffer slot (round-robins, so hitting more
     // than kMaxTracked entities in one window just evicts the oldest).
-    m_hits[m_nextSlot] = Hit{entityContext, expiresAt};
+    m_hits[m_nextSlot] = Hit{actorPtr, expiresAt};
     m_nextSlot = (m_nextSlot + 1) % kMaxTracked;
 }
 
-bool HitOutlineModule::shouldOutline(void* entityContext, bedrocktools::sdk::Color& outColor) const {
-    if (!enabled || !entityContext) return false;
+bool HitOutlineModule::shouldOutline(void* actorPtr, bedrocktools::sdk::Color& outColor) const {
+    if (!enabled || !actorPtr) return false;
 
     const std::int64_t t = nowMs();
     bool hit = false;
     for (const auto& h : m_hits) {
-        if (h.entityContext == entityContext && h.expiresAtMs > t) {
+        if (h.actorPtr == actorPtr && h.expiresAtMs > t) {
             hit = true;
             break;
         }

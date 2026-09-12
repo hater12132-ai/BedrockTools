@@ -15,10 +15,14 @@
 //
 // This module does NOT install its own render hook - glintcolor.cpp already
 // owns ActorShaderManagerSetupShaderParametersActorGlint, and that same hook
-// already receives both `entityContext` and `actor` per call, which is all
-// the identity we need. Installing a second detour on the same address would
-// conflict, so instead glintcolor.cpp's hook calls HitOutlineModule::shouldOutline()
-// directly via g_hitOutlineInstance before it does its own glint-color logic.
+// already receives an `actor` (Actor*) parameter per call - the exact same
+// pointer type AttackEvent::target already gives us, so we key hits by the
+// raw Actor* directly (previously this went through entityContext(), which
+// was an unverified/unnecessary translation and very likely the actual bug -
+// see the 1.26.45 debugging thread). Installing a second detour on the same
+// address would conflict, so instead glintcolor.cpp's hook calls
+// HitOutlineModule::shouldOutline() directly via g_hitOutlineInstance before
+// it does its own glint-color logic.
 class HitOutlineModule : public Module {
 public:
     HitOutlineModule();
@@ -32,14 +36,15 @@ public:
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
-    // Called from glintcolor.cpp's setupActorShaderParametersGlintHook.
-    // entityContext should be the same pointer AttackEvent::target->entityContext()
-    // produces. Returns true + writes outColor if this entity was hit recently.
-    bool shouldOutline(void* entityContext, bedrocktools::sdk::Color& outColor) const;
+    // Called from glintcolor.cpp's setupActorShaderParametersGlintHook, passing
+    // its `actor` parameter directly - the same raw Actor* AttackEvent::target
+    // gives us, no translation. Returns true + writes outColor if this actor
+    // was hit recently.
+    bool shouldOutline(void* actorPtr, bedrocktools::sdk::Color& outColor) const;
 
 private:
     struct Hit {
-        void* entityContext = nullptr;
+        void* actorPtr = nullptr;
         std::int64_t expiresAtMs = 0;
     };
 
@@ -64,7 +69,7 @@ private:
     std::int64_t m_lastDebugBannerAtMs = 0;
     void drawDebugBanner();
 
-    void trackHit(void* entityContext);
+    void trackHit(void* actorPtr);
 };
 
 // Set/cleared in the ctor/dtor, same pattern as g_glintColor in glintcolor.cpp.
