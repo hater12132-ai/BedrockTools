@@ -1,11 +1,16 @@
 #include "hitoutline.hpp"
+#include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/sdk/world/Actor.hpp>
 
 #include <algorithm>
+#include <android/log.h>
 #include <chrono>
 #include <cstdio>
 #include <string>
+#include <vector>
+
+#define HITOUTLINE_LOG(...) __android_log_print(ANDROID_LOG_WARN, "BT-HitOutline", __VA_ARGS__)
 
 HitOutlineModule* g_hitOutlineInstance = nullptr;
 
@@ -33,8 +38,11 @@ void HitOutlineModule::onInit() {
     // AttackEvent::target is a plain sdk::Actor*, not Player*.
     m_attackSubscription = bedrocktools::events::bus().subscribe<bedrocktools::events::AttackEvent>(
         [this](auto& event) {
+            HITOUTLINE_LOG("AttackEvent fired, target=%p", static_cast<void*>(event.target));
             if (!enabled || !event.target) return;
-            trackHit(event.target->entityContext());
+            void* ctx = event.target->entityContext();
+            HITOUTLINE_LOG("tracking hit, entityContext=%p, enabled=%d", ctx, enabled);
+            trackHit(ctx);
         }
     );
 
@@ -48,11 +56,48 @@ void HitOutlineModule::onDisable() {}
 
 void HitOutlineModule::onFrame() {
     const std::int64_t t = nowMs();
+    bool anyActive = false;
     for (auto& hit : m_hits) {
-        if (hit.entityContext && hit.expiresAtMs <= t) {
-            hit.entityContext = nullptr;
+        if (hit.entityContext) {
+            if (hit.expiresAtMs <= t) {
+                hit.entityContext = nullptr;
+            } else {
+                anyActive = true;
+            }
         }
     }
+
+    if (anyActive) drawDebugBanner();
+}
+
+void HitOutlineModule::drawDebugBanner() {
+    // TEMPORARY - see the comment on this method in hitoutline.hpp. Big,
+    // impossible-to-miss banner so this is a yes/no visual check, not
+    // something you have to squint at.
+    std::vector<PLModMenu_DrawCommand> cmds;
+
+    PLModMenu_DrawCommand bgCmd = {};
+    bgCmd.type = PL_DRAW_RECT_FILLED;
+    bgCmd.x = 40.0f;
+    bgCmd.y = 40.0f;
+    bgCmd.w = 500.0f;
+    bgCmd.h = 60.0f;
+    bgCmd.color = 0xCCFF00FFu; // bright magenta, impossible to confuse with normal UI
+    cmds.push_back(bgCmd);
+
+    PLModMenu_DrawCommand txtCmd = {};
+    txtCmd.type = PL_DRAW_TEXT;
+    txtCmd.x = 50.0f;
+    txtCmd.y = 55.0f;
+    txtCmd.w = 480.0f;
+    txtCmd.h = 40.0f;
+    txtCmd.color = 0xFF000000u;
+    txtCmd.size = 30.0f;
+    static const char* debugText = "HITOUTLINE DEBUG: ATTACKEVENT FIRED";
+    txtCmd.text = debugText;
+    cmds.push_back(txtCmd);
+
+    submitDrawCommands(moduleId, cmds);
 }
 
 void HitOutlineModule::trackHit(void* entityContext) {

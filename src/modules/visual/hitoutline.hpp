@@ -54,6 +54,16 @@ private:
 
     bedrocktools::events::Subscription m_attackSubscription = 0;
 
+    // TEMPORARY DIAGNOSTIC - draws an unmissable on-screen banner whenever a
+    // hit is tracked, using the same proven HUD draw path as ReachCounter/
+    // TargetHud. This is completely independent of the glint-hook render
+    // path. If you see this banner, AttackEvent + tracking are fine and the
+    // bug is isolated to the glint/entityContext side. If you never see it,
+    // the AttackEvent signature itself is dead on your game version. Remove
+    // once the real bug is found - it's noisy on purpose.
+    std::int64_t m_lastDebugBannerAtMs = 0;
+    void drawDebugBanner();
+
     void trackHit(void* entityContext);
 };
 
