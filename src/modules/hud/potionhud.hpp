@@ -53,6 +53,12 @@ private:
         float gridGap;
         float snapThreshold;
         std::uint32_t snapFlags;
+        bool showCard;
+        std::uint32_t cardColor;
+        float cardRadius;
+        float cardPadding;
+        bool showHeader;
+        bool singleLineRow;
     };
 
     ConfigSnapshot snapshotConfig() const;
@@ -93,4 +99,15 @@ private:
     bool m_snapToGrid = true;
     bool m_snapToElements = true;
     bool m_snapToScreenCenter = true;
+
+    // Card/header styling to match a widget-card look (dark rounded
+    // background, flask icon + "Active Potions" header, name+timer on one
+    // line). Purely additive - existing layout options above still work
+    // exactly as before when showCard/showHeader are turned off.
+    bool m_showCard = true;
+    std::string m_cardColor = "#CC15151A";
+    float m_cardRadius = 10.0f;
+    float m_cardPadding = 10.0f;
+    bool m_showHeader = true;
+    bool m_singleLineRow = true;
 };

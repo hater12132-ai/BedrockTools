@@ -587,7 +587,13 @@ PotionHudModule::ConfigSnapshot PotionHudModule::snapshotConfig() const {
         m_snapThreshold,
         (m_snapToGrid ? pl::modmenu::HudSnapGrid : pl::modmenu::HudSnapNone) |
             (m_snapToElements ? pl::modmenu::HudSnapElements : pl::modmenu::HudSnapNone) |
-            (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone)
+            (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone),
+        m_showCard,
+        parseColor(m_cardColor, 0xCC15151Au),
+        m_cardRadius,
+        m_cardPadding,
+        m_showHeader,
+        m_singleLineRow
     };
 }
 
@@ -740,15 +746,42 @@ void PotionHudModule::onFrame() {
     const float icon = iconSurfaceSize(config, surfaceScale);
     const float textWidth = textSurfaceWidth(config, effects, surfaceScale);
     const float gap = config.showText ? config.textOffsetX * config.uiScale * surfaceScale : 0.0f;
-    const float iconX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
     const float rowHeight = rowSurfaceHeight(config, surfaceScale);
     const float rowStride = rowHeight * std::max(0.25f, config.spacing);
     const float textSize = std::max(1.0f, config.textSize * config.uiScale * surfaceScale);
     const float timerSize = std::max(1.0f, textSize * 0.8f);
     const float shadowOffset = config.shadowOffset * config.uiScale * surfaceScale;
+    const float padding = config.cardPadding * config.uiScale * surfaceScale;
+    const bool hasEffects = !effects.empty();
+
+    // Card/header block - purely additive on top of the existing layout math
+    // above. Content width/height reuse the exact same measurements
+    // submitEditorElement() already uses, so the card always wraps the real
+    // content instead of an independently-guessed size.
+    static const std::string headerText = "Active Potions";
+    const float headerTextWidth = static_cast<float>(headerText.size()) * textSize * 0.56f;
+    const float headerIconSize = config.showHeader ? textSize * 1.3f : 0.0f;
+    const float headerHeight = config.showHeader && hasEffects ? std::max(headerIconSize, textSize) + padding * 0.75f : 0.0f;
+
+    const float contentWidth = icon + (config.showText ? gap + textWidth : 0.0f);
+    const float cardInnerWidth = std::max(contentWidth, config.showHeader ? headerIconSize + gap + headerTextWidth : 0.0f);
+    const std::size_t rowCount = std::max<std::size_t>(1, effects.size());
+    const float contentHeight = rowHeight + static_cast<float>(rowCount - 1) * rowStride;
+
+    const float cardX = config.hudPosX - padding;
+    const float cardY = config.hudPosY - padding;
+    const float cardWidth = cardInnerWidth + padding * 2.0f;
+    const float cardHeight = headerHeight + contentHeight + padding * 2.0f;
+
+    // Rows start below the header (if any); the card itself stays anchored
+    // at the original hudPosX/hudPosY so existing HUD-editor snap points
+    // don't shift.
+    const float rowStartY = config.hudPosY + headerHeight;
+    const float iconX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
+    const float cardRightInnerX = cardX + cardWidth - padding;
 
     std::vector<pl::modmenu::DrawCommand> commands;
-    commands.reserve(effects.size() * 6);
+    commands.reserve(effects.size() * 6 + 3);
 
     auto addText = [&](float x, float y, float widthMode, float size, std::uint32_t color, std::string text) {
         pl::modmenu::DrawCommand command;
@@ -762,10 +795,36 @@ void PotionHudModule::onFrame() {
         commands.push_back(std::move(command));
     };
 
+    if (config.showCard && hasEffects) {
+        pl::modmenu::DrawCommand card;
+        card.type = pl::modmenu::DrawCommandType::RectFilled;
+        card.x = cardX;
+        card.y = cardY;
+        card.w = cardWidth;
+        card.h = cardHeight;
+        card.x3 = config.cardRadius * config.uiScale * surfaceScale; // rounded corners, same field breakindicator.cpp uses
+        card.color = config.cardColor;
+        commands.push_back(card);
+    }
+
+    if (config.showHeader && hasEffects) {
+        pl::modmenu::DrawCommand headerIcon;
+        headerIcon.type = pl::modmenu::DrawCommandType::Image;
+        headerIcon.x = config.hudPosX;
+        headerIcon.y = config.hudPosY;
+        headerIcon.w = headerIconSize;
+        headerIcon.h = headerIconSize;
+        headerIcon.color = 0xFFFFFFFFu;
+        headerIcon.imageId = "textures/items/potion_bottle_drinkable";
+        commands.push_back(headerIcon);
+
+        addText(config.hudPosX + headerIconSize + gap, config.hudPosY + headerIconSize * 0.75f, 0.0f, textSize, config.mainColor, headerText);
+    }
+
     for (std::size_t row = 0; row < effects.size(); ++row) {
         const std::size_t source = config.bottomUp ? effects.size() - 1 - row : row;
         const RuntimeEffect& effect = effects[source];
-        const float rowY = config.hudPosY + static_cast<float>(row) * rowStride;
+        const float rowY = rowStartY + static_cast<float>(row) * rowStride;
 
         if (!effect.nativeIcon) {
             pl::modmenu::DrawCommand image;
@@ -787,7 +846,18 @@ void PotionHudModule::onFrame() {
         const std::uint32_t effectColor = expiring ? config.lowColor : config.mainColor;
         const std::string timer = formatDuration(effect.duration, effect.noCounter);
 
-        if (config.showTitle) {
+        if (config.showTitle && config.singleLineRow) {
+            // "Invisibility 1          13:47" - one line, name left, timer
+            // right-aligned to the card's inner edge - matches the reference.
+            const std::string title = titleForEffect(effect, config);
+            const float lineY = rowY + icon * 0.5f + textSize * 0.35f;
+            if (config.textShadow) {
+                addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, config.shadowColor, title);
+                addText(cardRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, config.shadowColor, timer);
+            }
+            addText(textX, lineY, widthMode, textSize, effectColor, title);
+            addText(cardRightInnerX, lineY, -1.0f, timerSize, effectColor, timer);
+        } else if (config.showTitle) {
             const std::string title = titleForEffect(effect, config);
             const float titleY = rowY + textSize;
             const float timerY = rowY + textSize + timerSize * 1.05f;
@@ -841,6 +911,12 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_snapToGrid")) m_snapToGrid = j["m_snapToGrid"].get<bool>();
     if (j.contains("m_snapToElements")) m_snapToElements = j["m_snapToElements"].get<bool>();
     if (j.contains("m_snapToScreenCenter")) m_snapToScreenCenter = j["m_snapToScreenCenter"].get<bool>();
+    if (j.contains("m_showCard")) m_showCard = j["m_showCard"].get<bool>();
+    if (j.contains("m_cardColor")) m_cardColor = j["m_cardColor"].get<std::string>();
+    if (j.contains("m_cardRadius")) m_cardRadius = std::clamp(j["m_cardRadius"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_cardPadding")) m_cardPadding = std::clamp(j["m_cardPadding"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_showHeader")) m_showHeader = j["m_showHeader"].get<bool>();
+    if (j.contains("m_singleLineRow")) m_singleLineRow = j["m_singleLineRow"].get<bool>();
 }
 
 void PotionHudModule::saveConfig(nlohmann::json& j) {
@@ -870,4 +946,10 @@ void PotionHudModule::saveConfig(nlohmann::json& j) {
     j["m_snapToGrid"] = m_snapToGrid;
     j["m_snapToElements"] = m_snapToElements;
     j["m_snapToScreenCenter"] = m_snapToScreenCenter;
+    j["m_showCard"] = m_showCard;
+    j["m_cardColor"] = m_cardColor;
+    j["m_cardRadius"] = m_cardRadius;
+    j["m_cardPadding"] = m_cardPadding;
+    j["m_showHeader"] = m_showHeader;
+    j["m_singleLineRow"] = m_singleLineRow;
 }
