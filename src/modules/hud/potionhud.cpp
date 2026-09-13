@@ -741,6 +741,12 @@ void PotionHudModule::onMenuRegistered() {
     slider("m_timerCapsuleRadius", "Timer Capsule Rounding", "capsules", "capsule_timer", "0", "24", "0.5", " px");
     slider("m_rowGap", "Gap Between Rows", "capsules", "capsule_effect", "0", "20", "0.5", " px");
 
+    schema.category("icons", "Icons", "Effect icon size and visibility");
+    section("icon_display", "Display", "icons");
+    toggle("m_showIcons", "Show Effect Icons", "icons", "icon_display");
+    slider("m_iconSizeScale", "Icon Size", "icons", "icon_display", "0.5", "2.5", "0.05", " x");
+    slider("m_iconOpacity", "Icon Opacity", "icons", "icon_display", "0", "1", "0.05", "");
+
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -795,6 +801,8 @@ PotionHudModule::ConfigSnapshot PotionHudModule::snapshotConfig() const {
         m_timerCapsuleRadius,
         m_showRowCapsule,
         parseColor(m_rowCapsuleColor, 0x26FFFFFFu),
+        m_showIcons,
+        m_iconSizeScale,
         m_iconOpacity,
         m_rowGap,
         m_showOutline,
@@ -820,7 +828,8 @@ void PotionHudModule::clearRuntime() {
 }
 
 float PotionHudModule::iconSurfaceSize(const ConfigSnapshot& config, float surfaceScale) {
-    return std::max(1.0f, VanillaEffectSize * config.uiScale * std::max(0.1f, surfaceScale));
+    const float scale = std::clamp(config.iconSizeScale, 0.25f, 3.0f);
+    return std::max(1.0f, VanillaEffectSize * scale * config.uiScale * std::max(0.1f, surfaceScale));
 }
 
 std::string PotionHudModule::titleForEffect(const RuntimeEffect& effect, const ConfigSnapshot& config) {
@@ -1053,6 +1062,18 @@ void PotionHudModule::onFrame() {
         return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
     };
     const std::int64_t now = nowMs();
+
+    // Smooth icon show/hide: text slides left when icons hide, right when shown.
+    {
+        const float target = config.showIcons ? 1.0f : 0.0f;
+        const float duration = std::max(120.0f, config.animationDurationMs);
+        // ~60fps step toward target (ease via larger step when farther).
+        const float step = 16.0f / duration;
+        if (m_iconReveal < target) m_iconReveal = std::min(target, m_iconReveal + step);
+        else if (m_iconReveal > target) m_iconReveal = std::max(target, m_iconReveal - step);
+        if (!config.animate) m_iconReveal = target;
+    }
+
     if (config.animate) {
         for (const auto& effect : effects) {
             m_effectFirstSeenMs.try_emplace(effect.id, now);
@@ -1200,14 +1221,40 @@ void PotionHudModule::onFrame() {
         const float contentRight = config.hudPosX - padding + cardWidth - padding;
         const std::string timer = formatDuration(effect.duration, effect.noCounter);
         const std::string title = config.showTitle ? titleForEffect(effect, config) : std::string{};
-        const float titleWidth = static_cast<float>(title.size()) * textSize * 0.56f;
-        const float timerWidth = static_cast<float>(timer.size()) * timerSize * 0.62f;
+        // Slightly generous width estimate so long names don't under-size the pill.
+        const float titleWidth = static_cast<float>(title.size()) * textSize * 0.62f;
+        const float timerWidth = static_cast<float>(std::max<std::size_t>(4, timer.size())) * timerSize * 0.68f;
 
-        // Effect capsule = icon + name only (not the full row).
+        // --- Timer capsule first (anchors the right edge) ---
+        const float timerCapPadX = padding * 0.4f;
+        const float timerCapPadY = std::max(2.0f, capsuleHeight * 0.12f);
+        const float timerCapW = timerWidth + timerCapPadX * 2.0f;
+        const float timerCapH = std::max(timerSize + timerCapPadY * 2.0f, capsuleHeight * 0.75f);
+        const float timerCapX = contentRight - timerCapW + shakeX;
+        const float timerCapY = animatedRowY + (rowStride - timerCapH) * 0.5f;
+        const float timerCapRadius = config.timerCapsuleRadius * config.uiScale * surfaceScale;
+        const float capsuleGap = std::max(4.0f, padding * 0.35f); // hard gap so pills never merge
+        if (config.showTimerCapsule && config.showText) {
+            addRect(timerCapX, timerCapY, timerCapW, timerCapH, timerCapRadius,
+                    scaleAlpha(config.timerCapsuleColor, rowAlpha));
+        }
+
+        // Icon reveal 0..1 (animated). Text slides with this value.
+        const float iconReveal = std::clamp(m_iconReveal, 0.0f, 1.0f);
+        const float drawnIcon = icon * iconReveal; // collapses space as icons hide
+        const float iconSlot = icon; // full slot used for slide distance
+
+        // --- Effect capsule: icon + name, clamped so it never reaches the timer ---
         const bool useEffectCap = config.showEffectCapsule || config.showRowCapsule;
         const float effectCapPadX = padding * 0.35f;
+        const float nameStartX = iconX + drawnIcon + (iconReveal > 0.01f ? gap * iconReveal : 0.0f);
         const float effectCapX = iconX - effectCapPadX + shakeX;
-        const float effectCapW = icon + gap + titleWidth + effectCapPadX * 2.0f;
+        float effectCapW = (nameStartX - iconX) + titleWidth + effectCapPadX * 2.0f;
+        // Never overlap the timer capsule (or the timer text zone).
+        const float effectMaxRight = (config.showTimerCapsule ? timerCapX : contentRight) - capsuleGap;
+        if (effectCapX + effectCapW > effectMaxRight) {
+            effectCapW = std::max(icon + effectCapPadX * 2.0f, effectMaxRight - effectCapX);
+        }
         const float effectCapRadius = (config.showEffectCapsule ? config.effectCapsuleRadius : config.cardRadius * 0.7f)
             * config.uiScale * surfaceScale;
         const std::uint32_t effectCapColor = config.showEffectCapsule
@@ -1218,23 +1265,10 @@ void PotionHudModule::onFrame() {
                     scaleAlpha(effectCapColor, rowAlpha));
         }
 
-        // Timer capsule (small pill on the right).
-        const float timerCapPadX = padding * 0.35f;
-        const float timerCapPadY = std::max(2.0f, capsuleHeight * 0.12f);
-        const float timerCapW = timerWidth + timerCapPadX * 2.0f;
-        const float timerCapH = std::max(timerSize + timerCapPadY * 2.0f, capsuleHeight * 0.75f);
-        const float timerCapX = contentRight - timerCapW + shakeX;
-        const float timerCapY = animatedRowY + (rowStride - timerCapH) * 0.5f;
-        const float timerCapRadius = config.timerCapsuleRadius * config.uiScale * surfaceScale;
-        if (config.showTimerCapsule && config.showText) {
-            addRect(timerCapX, timerCapY, timerCapW, timerCapH, timerCapRadius,
-                    scaleAlpha(config.timerCapsuleColor, rowAlpha));
-        }
-
-        // Icon on top of effect capsule / card.
-        if (!effect.nativeIcon || config.showCard) {
+        // Icon (fades with iconReveal).
+        if (iconReveal > 0.01f && (!effect.nativeIcon || config.showCard)) {
             const std::uint8_t iconAlpha = static_cast<std::uint8_t>(
-                std::clamp(config.iconOpacity * rowAlpha, 0.0f, 1.0f) * 255.0f);
+                std::clamp(config.iconOpacity * rowAlpha * iconReveal, 0.0f, 1.0f) * 255.0f);
             pl::modmenu::DrawCommand image;
             image.type = pl::modmenu::DrawCommandType::Image;
             image.x = iconX + shakeX;
@@ -1248,7 +1282,12 @@ void PotionHudModule::onFrame() {
 
         if (!config.showText) continue;
         const bool left = config.textSide == 1;
-        const float textX = (left ? config.hudPosX + textWidth : iconX + icon + gap) + shakeX;
+        // When icons hide, text slides left into the icon column; when shown, slides right.
+        const float textXHidden = iconX + shakeX;
+        const float textXShown = iconX + iconSlot + gap + shakeX;
+        const float textX = left
+            ? (config.hudPosX + textWidth + shakeX)
+            : (textXHidden + (textXShown - textXHidden) * iconReveal);
         const float widthMode = left ? -1.0f : 0.0f;
         const std::uint32_t effectColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, rowAlpha);
         const std::uint32_t shadowColor = scaleAlpha(config.shadowColor, rowAlpha);
@@ -1261,7 +1300,6 @@ void PotionHudModule::onFrame() {
             if (expiring) timerSizeAnim = timerSize * (1.0f + 0.06f * pulse);
         }
         const std::uint32_t timerColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, rowAlpha * timerPulse);
-        // Center timer text inside its capsule when enabled; otherwise right-align to card.
         const float timerTextX = config.showTimerCapsule
             ? (timerCapX + timerCapW - timerCapPadX)
             : contentRight;
@@ -1350,6 +1388,8 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_timerCapsuleRadius")) m_timerCapsuleRadius = std::clamp(j["m_timerCapsuleRadius"].get<float>(), 0.0f, 24.0f);
     if (j.contains("m_showRowCapsule")) m_showRowCapsule = j["m_showRowCapsule"].get<bool>();
     if (j.contains("m_rowCapsuleColor")) m_rowCapsuleColor = j["m_rowCapsuleColor"].get<std::string>();
+    if (j.contains("m_showIcons")) m_showIcons = j["m_showIcons"].get<bool>();
+    if (j.contains("m_iconSizeScale")) m_iconSizeScale = std::clamp(j["m_iconSizeScale"].get<float>(), 0.25f, 3.0f);
     if (j.contains("m_iconOpacity")) m_iconOpacity = std::clamp(j["m_iconOpacity"].get<float>(), 0.0f, 1.0f);
     if (j.contains("m_rowGap")) m_rowGap = std::clamp(j["m_rowGap"].get<float>(), 0.0f, 40.0f);
     if (j.contains("m_showOutline")) m_showOutline = j["m_showOutline"].get<bool>();
@@ -1406,6 +1446,8 @@ void PotionHudModule::saveConfig(nlohmann::json& j) {
     j["m_timerCapsuleRadius"] = m_timerCapsuleRadius;
     j["m_showRowCapsule"] = m_showRowCapsule;
     j["m_rowCapsuleColor"] = m_rowCapsuleColor;
+    j["m_showIcons"] = m_showIcons;
+    j["m_iconSizeScale"] = m_iconSizeScale;
     j["m_iconOpacity"] = m_iconOpacity;
     j["m_rowGap"] = m_rowGap;
     j["m_showOutline"] = m_showOutline;

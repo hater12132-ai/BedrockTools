@@ -74,6 +74,8 @@ private:
         // Legacy alias kept for snapshot compatibility with older configs.
         bool showRowCapsule;
         std::uint32_t rowCapsuleColor;
+        bool showIcons;
+        float iconSizeScale;
         float iconOpacity;
         float rowGap;
         bool showOutline;
@@ -151,8 +153,13 @@ private:
     // Legacy single-row capsule (maps to effect capsule if enabled in old configs).
     bool m_showRowCapsule = false;
     std::string m_rowCapsuleColor = "#26FFFFFF";
+    bool m_showIcons = true;
+    float m_iconSizeScale = 1.0f; // multiplier on base 16px effect icons
     float m_iconOpacity = 1.0f;
     float m_rowGap = 4.0f;
+
+    // Smooth 0→1 reveal for icon show/hide (text slides with it).
+    float m_iconReveal = 1.0f;
 
     // Outline - there's no dedicated stroke/border draw type in this API,
     // so this uses the same "bigger rect behind, smaller rect in front"
