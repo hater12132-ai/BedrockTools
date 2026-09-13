@@ -65,12 +65,18 @@ private:
         bool showHeaderCapsule;
         std::uint32_t headerCapsuleColor;
         float headerCapsuleRadius;
+        float headerCapsuleWidth;   // 0 = auto
+        float headerCapsuleHeight;  // 0 = auto
         bool showEffectCapsule;
         std::uint32_t effectCapsuleColor;
         float effectCapsuleRadius;
+        float effectCapsuleWidth;   // 0 = auto
+        float effectCapsuleHeight;  // 0 = auto
         bool showTimerCapsule;
         std::uint32_t timerCapsuleColor;
         float timerCapsuleRadius;
+        float timerCapsuleWidth;    // 0 = auto
+        float timerCapsuleHeight;   // 0 = auto
         // Legacy alias kept for snapshot compatibility with older configs.
         bool showRowCapsule;
         std::uint32_t rowCapsuleColor;
@@ -144,12 +150,18 @@ private:
     bool m_showHeaderCapsule = true;
     std::string m_headerCapsuleColor = "#FF1A1A20";
     float m_headerCapsuleRadius = 8.0f;
+    float m_headerCapsuleWidth = 0.0f;   // 0 = auto-fit
+    float m_headerCapsuleHeight = 0.0f;  // 0 = auto-fit
     bool m_showEffectCapsule = true;
     std::string m_effectCapsuleColor = "#FF1A1A20";
     float m_effectCapsuleRadius = 8.0f;
+    float m_effectCapsuleWidth = 0.0f;
+    float m_effectCapsuleHeight = 0.0f;
     bool m_showTimerCapsule = true;
     std::string m_timerCapsuleColor = "#FF1A1A20";
     float m_timerCapsuleRadius = 6.0f;
+    float m_timerCapsuleWidth = 0.0f;
+    float m_timerCapsuleHeight = 0.0f;
     // Legacy single-row capsule (maps to effect capsule if enabled in old configs).
     bool m_showRowCapsule = false;
     std::string m_rowCapsuleColor = "#26FFFFFF";
