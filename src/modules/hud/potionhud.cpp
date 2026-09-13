@@ -597,7 +597,7 @@ void PotionHudModule::onMenuRegistered() {
 
     section("effect_layout", "Effect Stack", "layout");
     slider("m_uiScale", "UI Scale", "layout", "effect_layout", "0.5", "3", "0.05", "x");
-    slider("m_spacing", "Row Spacing", "layout", "effect_layout", "0.25", "3", "0.05", "x");
+    slider("m_spacing", "Row Spacing", "layout", "effect_layout", "1", "3", "0.05", "x");
     toggle("m_bottomUp", "Bottom Up", "layout", "effect_layout");
     section("text_layout", "Text Placement", "layout");
     auto side = node("m_textSide", "Text Side", "layout", ConfigControlTypeV2::Choice);
@@ -856,14 +856,25 @@ std::string PotionHudModule::titleForEffect(const RuntimeEffect& effect, const C
 
 float PotionHudModule::rowSurfaceHeight(const ConfigSnapshot& config, float surfaceScale) {
     const float icon = iconSurfaceSize(config, surfaceScale);
-    if (!config.showText) return icon;
     const float textSize = config.textSize * config.uiScale * surfaceScale;
     const float timerSize = textSize * 0.8f;
-    // Single-line mode (name + timer on one row) keeps rows compact like the reference.
-    const float textHeight = !config.showTitle
-        ? timerSize
-        : (config.singleLineRow ? textSize : textSize + timerSize * 1.15f);
-    return std::max(icon, std::max(1.0f, textHeight));
+    float contentH = icon;
+    if (config.showText) {
+        const float textHeight = !config.showTitle
+            ? timerSize
+            : (config.singleLineRow ? textSize : textSize + timerSize * 1.15f);
+        contentH = std::max(contentH, std::max(1.0f, textHeight));
+    }
+    // Fixed capsule sizes must expand the row or pills stack on top of each other.
+    if (config.showEffectCapsule && config.effectCapsuleHeight > 0.5f) {
+        contentH = std::max(contentH, config.effectCapsuleHeight * config.uiScale * surfaceScale);
+    }
+    if (config.showTimerCapsule && config.timerCapsuleHeight > 0.5f) {
+        contentH = std::max(contentH, config.timerCapsuleHeight * config.uiScale * surfaceScale);
+    }
+    // Always leave a little vertical padding inside the row slot.
+    const float gap = std::max(2.0f, config.rowGap * config.uiScale * surfaceScale);
+    return contentH + gap;
 }
 
 float PotionHudModule::textSurfaceWidth(const ConfigSnapshot& config, const std::vector<RuntimeEffect>& effects, float surfaceScale) {
@@ -884,7 +895,7 @@ void PotionHudModule::submitEditorElement(const ConfigSnapshot& config, const st
     const float textWidth = textSurfaceWidth(config, effects, surfaceScale);
     const float gap = config.showText ? config.textOffsetX * config.uiScale * surfaceScale : 0.0f;
     const float rowHeight = rowSurfaceHeight(config, surfaceScale);
-    const float rowStride = rowHeight * std::max(0.25f, config.spacing);
+    const float rowStride = rowHeight * std::max(1.0f, config.spacing);
     const std::size_t count = effects.size();
     const float padding = config.cardPadding * config.uiScale * surfaceScale;
     const float textSize = std::max(1.0f, config.textSize * config.uiScale * surfaceScale);
@@ -943,7 +954,7 @@ bool PotionHudModule::renderNative(void* context, void* client) {
     const float gap = config.showText ? config.textOffsetX * config.uiScale * surfaceScale : 0.0f;
     const float iconSurfaceX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
     const float rowHeight = rowSurfaceHeight(config, surfaceScale);
-    const float rowStride = rowHeight * std::max(0.25f, config.spacing);
+    const float rowStride = rowHeight * std::max(1.0f, config.spacing);
     const float textSize = std::max(1.0f, config.textSize * config.uiScale * surfaceScale);
     const float padding = config.cardPadding * config.uiScale * surfaceScale;
     // Same header offset used by the card/draw-command path so native icons
@@ -1021,7 +1032,9 @@ void PotionHudModule::onFrame() {
     const float textWidth = textSurfaceWidth(config, effects, surfaceScale);
     const float gap = config.showText ? config.textOffsetX * config.uiScale * surfaceScale : 0.0f;
     const float rowHeight = rowSurfaceHeight(config, surfaceScale);
-    const float rowStride = rowHeight * std::max(0.25f, config.spacing);
+    // Spacing is a multiplier on the full row slot. Never go below 1.0 so
+    // effect names/capsules cannot stack on top of each other.
+    const float rowStride = rowHeight * std::max(1.0f, config.spacing);
     const float textSize = std::max(1.0f, config.textSize * config.uiScale * surfaceScale);
     const float timerSize = std::max(1.0f, textSize * 0.8f);
     const float shadowOffset = config.shadowOffset * config.uiScale * surfaceScale;
@@ -1372,7 +1385,7 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("hudPosX")) hudPosX = std::clamp(j["hudPosX"].get<float>(), 0.0f, 4000.0f);
     if (j.contains("hudPosY")) hudPosY = std::clamp(j["hudPosY"].get<float>(), 0.0f, 4000.0f);
     if (j.contains("m_uiScale")) m_uiScale = std::clamp(j["m_uiScale"].get<float>(), 0.5f, 3.0f);
-    if (j.contains("m_spacing")) m_spacing = std::clamp(j["m_spacing"].get<float>(), 0.25f, 3.0f);
+    if (j.contains("m_spacing")) m_spacing = std::clamp(j["m_spacing"].get<float>(), 1.0f, 3.0f);
     if (j.contains("m_bottomUp")) m_bottomUp = j["m_bottomUp"].get<bool>();
     if (j.contains("m_showText")) m_showText = j["m_showText"].get<bool>();
     if (j.contains("m_showTitle")) m_showTitle = j["m_showTitle"].get<bool>();
