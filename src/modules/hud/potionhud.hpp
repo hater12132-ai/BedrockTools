@@ -62,6 +62,16 @@ private:
         float cardHeight;  // 0 = auto (fit content)
         bool showHeader;
         bool singleLineRow;
+        bool showHeaderCapsule;
+        std::uint32_t headerCapsuleColor;
+        float headerCapsuleRadius;
+        bool showEffectCapsule;
+        std::uint32_t effectCapsuleColor;
+        float effectCapsuleRadius;
+        bool showTimerCapsule;
+        std::uint32_t timerCapsuleColor;
+        float timerCapsuleRadius;
+        // Legacy alias kept for snapshot compatibility with older configs.
         bool showRowCapsule;
         std::uint32_t rowCapsuleColor;
         float iconOpacity;
@@ -127,12 +137,22 @@ private:
     bool m_showHeader = true;
     bool m_singleLineRow = true;
 
-    // Per-row "pill" capsule (optional). Off by default so the list looks
-    // like the clean reference panel (icon + name ............... timer).
+    // Three independent grey-black capsules (all configurable):
+    // 1) header "Active Potions"  2) effect icon+name  3) timer
+    bool m_showHeaderCapsule = true;
+    std::string m_headerCapsuleColor = "#FF1A1A20";
+    float m_headerCapsuleRadius = 8.0f;
+    bool m_showEffectCapsule = true;
+    std::string m_effectCapsuleColor = "#FF1A1A20";
+    float m_effectCapsuleRadius = 8.0f;
+    bool m_showTimerCapsule = true;
+    std::string m_timerCapsuleColor = "#FF1A1A20";
+    float m_timerCapsuleRadius = 6.0f;
+    // Legacy single-row capsule (maps to effect capsule if enabled in old configs).
     bool m_showRowCapsule = false;
     std::string m_rowCapsuleColor = "#26FFFFFF";
-    float m_iconOpacity = 1.0f;   // full opacity icons like the reference
-    float m_rowGap = 4.0f; // px between capsules before scaling - fixes them merging together
+    float m_iconOpacity = 1.0f;
+    float m_rowGap = 4.0f;
 
     // Outline - there's no dedicated stroke/border draw type in this API,
     // so this uses the same "bigger rect behind, smaller rect in front"
