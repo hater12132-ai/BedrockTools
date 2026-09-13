@@ -729,9 +729,19 @@ bool PotionHudModule::renderNative(void* context, void* client) {
         : 0.0f;
     const float rowStartY = config.hudPosY + headerHeight;
 
+    // When the custom card overlay is enabled, do NOT draw native textures
+    // here. That pass runs under the mod-menu DrawCommands, so the card
+    // would cover the icons (they looked "behind" the panel). Icons are
+    // drawn later as DrawCommand images on top of the card instead.
+    const bool drawNativeHere = !config.showCard;
+
     for (std::size_t row = 0; row < effects.size(); ++row) {
         const std::size_t source = config.bottomUp ? effects.size() - 1 - row : row;
         RuntimeEffect& effect = effects[source];
+        if (!drawNativeHere) {
+            effect.nativeIcon = false;
+            continue;
+        }
         if (!usesNativeTexture(effect.id)) continue;
         const std::string_view path = effectTexturePath(effect.id);
         if (path.empty()) continue;
@@ -916,9 +926,30 @@ void PotionHudModule::onFrame() {
         const RuntimeEffect& effect = effects[source];
         const float rowY = rowStartY + static_cast<float>(row) * rowStride;
 
-        // Fade + slide-up entrance for newly-appeared effects.
+        // Entrance: ease-out fade + slide up when the effect first appears.
         const float anim = animProgress(effect.id);
-        const float animatedRowY = rowY + (1.0f - anim) * (padding * 0.8f);
+        const float animatedRowY = rowY + (1.0f - anim) * (padding * 1.1f);
+
+        // Low-time state (≤ WarningSeconds): red text, shake, then fade out.
+        const int remainingSeconds = (effect.noCounter || effect.duration < 0)
+            ? -1
+            : effect.duration / 20;
+        const bool expiring = remainingSeconds >= 0 && remainingSeconds <= WarningSeconds;
+        // Shake intensifies as time runs out (strongest under 5s).
+        float shakeX = 0.0f;
+        float expireFade = 1.0f;
+        if (config.animate && expiring) {
+            const float urgency = 1.0f - static_cast<float>(remainingSeconds) / static_cast<float>(WarningSeconds);
+            const float shakeAmp = (1.2f + 2.4f * urgency) * config.uiScale * surfaceScale;
+            // ~12 Hz horizontal shake
+            shakeX = std::sin(static_cast<float>(now) * 0.075f + static_cast<float>(effect.id) * 1.7f) * shakeAmp;
+            // Final second: fade out before the effect disappears
+            if (remainingSeconds <= 1) {
+                const int ticksLeft = std::max(0, effect.duration);
+                expireFade = std::clamp(static_cast<float>(ticksLeft) / 20.0f, 0.0f, 1.0f);
+            }
+        }
+        const float rowAlpha = anim * expireFade;
 
         // Optional per-row "pill" capsule. When off (default), layout is the
         // clean reference style: icon | name .................... duration
@@ -927,26 +958,28 @@ void PotionHudModule::onFrame() {
         const float capsuleHeight = std::max(1.0f, rowStride - config.rowGap * config.uiScale * surfaceScale);
         const float capsuleY = animatedRowY + (rowStride - capsuleHeight) * 0.5f;
         const float capsuleRadiusPx = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
-        // Right edge used for right-aligning the timer (card edge when no capsule)
         const float timerRightX = config.showRowCapsule
             ? (capsuleX + capsuleWidth - padding * 0.5f)
             : (config.hudPosX + cardInnerWidth);
 
         if (config.showRowCapsule) {
             if (config.showOutline && outlineThicknessPx > 0.01f) {
-                addRect(capsuleX - outlineThicknessPx, capsuleY - outlineThicknessPx,
+                addRect(capsuleX - outlineThicknessPx + shakeX, capsuleY - outlineThicknessPx,
                         capsuleWidth + outlineThicknessPx * 2.0f, capsuleHeight + outlineThicknessPx * 2.0f,
-                        capsuleRadiusPx + outlineThicknessPx, scaleAlpha(config.outlineColor, anim));
+                        capsuleRadiusPx + outlineThicknessPx, scaleAlpha(config.outlineColor, rowAlpha));
             }
-            addRect(capsuleX, capsuleY, capsuleWidth, capsuleHeight, capsuleRadiusPx, scaleAlpha(config.rowCapsuleColor, anim));
+            addRect(capsuleX + shakeX, capsuleY, capsuleWidth, capsuleHeight, capsuleRadiusPx,
+                    scaleAlpha(config.rowCapsuleColor, rowAlpha));
         }
 
-        // Effect icon - full opacity by default, left-aligned like the reference.
+        // Always draw icons via DrawCommands when the card is on so they sit
+        // on TOP of the panel (native pass would be covered by the card).
         if (!effect.nativeIcon) {
-            const std::uint8_t iconAlpha = static_cast<std::uint8_t>(std::clamp(config.iconOpacity, 0.0f, 1.0f) * anim * 255.0f);
+            const std::uint8_t iconAlpha = static_cast<std::uint8_t>(
+                std::clamp(config.iconOpacity * rowAlpha, 0.0f, 1.0f) * 255.0f);
             pl::modmenu::DrawCommand image;
             image.type = pl::modmenu::DrawCommandType::Image;
-            image.x = config.showRowCapsule ? (capsuleX + padding * 0.3f) : iconX;
+            image.x = (config.showRowCapsule ? (capsuleX + padding * 0.3f) : iconX) + shakeX;
             image.y = config.showRowCapsule
                 ? (capsuleY + (capsuleHeight - icon) * 0.5f)
                 : (animatedRowY + (rowStride - icon) * 0.5f);
@@ -959,40 +992,48 @@ void PotionHudModule::onFrame() {
 
         if (!config.showText) continue;
         const bool left = config.textSide == 1;
-        const float textX = left ? config.hudPosX + textWidth : iconX + icon + gap;
+        const float textX = (left ? config.hudPosX + textWidth : iconX + icon + gap) + shakeX;
         const float widthMode = left ? -1.0f : 0.0f;
-        const bool expiring = !effect.noCounter && effect.duration != -1 && effect.duration / 20 <= WarningSeconds;
-        const std::uint32_t effectColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, anim);
-        const std::uint32_t shadowColor = scaleAlpha(config.shadowColor, anim);
+        const std::uint32_t effectColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, rowAlpha);
+        const std::uint32_t shadowColor = scaleAlpha(config.shadowColor, rowAlpha);
         const std::string timer = formatDuration(effect.duration, effect.noCounter);
 
+        // Subtle timer "pulse" on the countdown numbers (alpha + micro scale feel via size).
+        float timerPulse = 1.0f;
+        float timerSizeAnim = timerSize;
+        if (config.animate && !effect.noCounter && effect.duration >= 0) {
+            const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(now) * 0.012f);
+            timerPulse = expiring ? (0.75f + 0.25f * pulse) : (0.92f + 0.08f * pulse);
+            if (expiring) timerSizeAnim = timerSize * (1.0f + 0.06f * pulse);
+        }
+        const std::uint32_t timerColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, rowAlpha * timerPulse);
+
         if (config.showTitle && config.singleLineRow) {
-            // "Health Boost I          ∞" / "Invisibility I     1:32"
-            // name left, timer right-aligned (matches the screenshot).
             const std::string title = titleForEffect(effect, config);
             const float lineY = config.showRowCapsule
                 ? (animatedRowY + capsuleHeight * 0.5f + textSize * 0.35f)
                 : (animatedRowY + rowStride * 0.5f + textSize * 0.35f);
             if (config.textShadow) {
                 addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, shadowColor, title);
-                addText(timerRightX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, shadowColor, timer);
+                addText(timerRightX + shakeX + shadowOffset, lineY + shadowOffset, -1.0f, timerSizeAnim, shadowColor, timer);
             }
             addText(textX, lineY, widthMode, textSize, effectColor, title);
-            addText(timerRightX, lineY, -1.0f, timerSize, effectColor, timer);
+            addText(timerRightX + shakeX, lineY, -1.0f, timerSizeAnim, timerColor, timer);
         } else if (config.showTitle) {
             const std::string title = titleForEffect(effect, config);
             const float titleY = animatedRowY + textSize;
             const float timerY = animatedRowY + textSize + timerSize * 1.05f;
             if (config.textShadow) {
                 addText(textX + shadowOffset, titleY + shadowOffset, widthMode, textSize, shadowColor, title);
-                addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, shadowColor, timer);
+                addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSizeAnim, shadowColor, timer);
             }
             addText(textX, titleY, widthMode, textSize, effectColor, title);
-            addText(textX, timerY, widthMode, timerSize, effectColor, timer);
+            addText(textX, timerY, widthMode, timerSizeAnim, timerColor, timer);
         } else {
             const float timerY = animatedRowY + icon * 0.5f + timerSize * 0.35f;
-            if (config.textShadow) addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, shadowColor, timer);
-            addText(textX, timerY, widthMode, timerSize, effectColor, timer);
+            if (config.textShadow)
+                addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSizeAnim, shadowColor, timer);
+            addText(textX, timerY, widthMode, timerSizeAnim, timerColor, timer);
         }
     }
 

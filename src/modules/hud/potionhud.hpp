@@ -143,6 +143,6 @@ private:
 
     // New effects fade + slide in instead of popping in solid.
     bool m_animate = true;
-    float m_animationDurationMs = 220.0f;
+    float m_animationDurationMs = 320.0f; // entrance slide/fade duration
     std::unordered_map<std::uint32_t, std::int64_t> m_effectFirstSeenMs;
 };
