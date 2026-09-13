@@ -59,6 +59,9 @@ private:
         float cardPadding;
         bool showHeader;
         bool singleLineRow;
+        bool showRowCapsule;
+        std::uint32_t rowCapsuleColor;
+        float iconOpacity;
     };
 
     ConfigSnapshot snapshotConfig() const;
@@ -110,4 +113,11 @@ private:
     float m_cardPadding = 10.0f;
     bool m_showHeader = true;
     bool m_singleLineRow = true;
+
+    // Per-row "pill" capsule (nested rounded rect inside the card) and a
+    // faded icon sitting behind the text inside it, matching the reference
+    // more closely than a separate icon column.
+    bool m_showRowCapsule = true;
+    std::string m_rowCapsuleColor = "#26FFFFFF";
+    float m_iconOpacity = 0.45f;
 };

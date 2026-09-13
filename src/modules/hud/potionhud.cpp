@@ -593,7 +593,10 @@ PotionHudModule::ConfigSnapshot PotionHudModule::snapshotConfig() const {
         m_cardRadius,
         m_cardPadding,
         m_showHeader,
-        m_singleLineRow
+        m_singleLineRow,
+        m_showRowCapsule,
+        parseColor(m_rowCapsuleColor, 0x26FFFFFFu),
+        m_iconOpacity
     };
 }
 
@@ -778,7 +781,6 @@ void PotionHudModule::onFrame() {
     // don't shift.
     const float rowStartY = config.hudPosY + headerHeight;
     const float iconX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
-    const float cardRightInnerX = cardX + cardWidth - padding;
 
     std::vector<pl::modmenu::DrawCommand> commands;
     commands.reserve(effects.size() * 6 + 3);
@@ -815,7 +817,12 @@ void PotionHudModule::onFrame() {
         headerIcon.w = headerIconSize;
         headerIcon.h = headerIconSize;
         headerIcon.color = 0xFFFFFFFFu;
-        headerIcon.imageId = "textures/items/potion_bottle_drinkable";
+        // Reuse the SAME bundled/registered icon the per-row fallback icon
+        // already uses (GenericPotionImageId) instead of a guessed vanilla
+        // texture path - that guess resolved to the wrong icon (a sword) on
+        // 1.26.45. This one is guaranteed to exist since it's shipped with
+        // the mod itself, not read from the game's resource pack.
+        headerIcon.imageId = GenericPotionImageId;
         commands.push_back(headerIcon);
 
         addText(config.hudPosX + headerIconSize + gap, config.hudPosY + headerIconSize * 0.75f, 0.0f, textSize, config.mainColor, headerText);
@@ -826,14 +833,39 @@ void PotionHudModule::onFrame() {
         const RuntimeEffect& effect = effects[source];
         const float rowY = rowStartY + static_cast<float>(row) * rowStride;
 
+        // Nested "pill" capsule for this row, matching the reference's two
+        // layers of rounding (outer card + lighter inner capsule per row).
+        const float capsuleX = config.hudPosX - padding * 0.4f;
+        const float capsuleY = rowY - padding * 0.3f;
+        const float capsuleWidth = cardInnerWidth + padding * 0.8f;
+        const float capsuleHeight = std::max(icon, textSize + timerSize * 0.6f) + padding * 0.6f;
+        const float capsuleRightInnerX = capsuleX + capsuleWidth - padding * 0.5f;
+
+        if (config.showRowCapsule) {
+            pl::modmenu::DrawCommand capsule;
+            capsule.type = pl::modmenu::DrawCommandType::RectFilled;
+            capsule.x = capsuleX;
+            capsule.y = capsuleY;
+            capsule.w = capsuleWidth;
+            capsule.h = capsuleHeight;
+            capsule.x3 = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
+            capsule.color = config.rowCapsuleColor;
+            commands.push_back(capsule);
+        }
+
+        // Icon sits behind the text, inside the capsule bounds (not off to
+        // the side outside it) - drawn faded so it reads as a watermark
+        // rather than a separate icon slot, and pushed BEFORE the text
+        // commands below so it's layered underneath.
         if (!effect.nativeIcon) {
+            const std::uint8_t iconAlpha = static_cast<std::uint8_t>(std::clamp(config.iconOpacity, 0.0f, 1.0f) * 255.0f);
             pl::modmenu::DrawCommand image;
             image.type = pl::modmenu::DrawCommandType::Image;
-            image.x = iconX;
-            image.y = rowY;
+            image.x = capsuleX + padding * 0.3f;
+            image.y = capsuleY + (capsuleHeight - icon) * 0.5f;
             image.w = icon;
             image.h = icon;
-            image.color = 0xFFFFFFFFu;
+            image.color = (static_cast<std::uint32_t>(iconAlpha) << 24) | 0x00FFFFFFu;
             image.imageId = fallbackImageId(effect.id);
             commands.push_back(std::move(image));
         }
@@ -848,15 +880,15 @@ void PotionHudModule::onFrame() {
 
         if (config.showTitle && config.singleLineRow) {
             // "Invisibility 1          13:47" - one line, name left, timer
-            // right-aligned to the card's inner edge - matches the reference.
+            // right-aligned to this row's own capsule, not the outer card.
             const std::string title = titleForEffect(effect, config);
             const float lineY = rowY + icon * 0.5f + textSize * 0.35f;
             if (config.textShadow) {
                 addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, config.shadowColor, title);
-                addText(cardRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, config.shadowColor, timer);
+                addText(capsuleRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, config.shadowColor, timer);
             }
             addText(textX, lineY, widthMode, textSize, effectColor, title);
-            addText(cardRightInnerX, lineY, -1.0f, timerSize, effectColor, timer);
+            addText(capsuleRightInnerX, lineY, -1.0f, timerSize, effectColor, timer);
         } else if (config.showTitle) {
             const std::string title = titleForEffect(effect, config);
             const float titleY = rowY + textSize;
@@ -917,6 +949,9 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_cardPadding")) m_cardPadding = std::clamp(j["m_cardPadding"].get<float>(), 0.0f, 40.0f);
     if (j.contains("m_showHeader")) m_showHeader = j["m_showHeader"].get<bool>();
     if (j.contains("m_singleLineRow")) m_singleLineRow = j["m_singleLineRow"].get<bool>();
+    if (j.contains("m_showRowCapsule")) m_showRowCapsule = j["m_showRowCapsule"].get<bool>();
+    if (j.contains("m_rowCapsuleColor")) m_rowCapsuleColor = j["m_rowCapsuleColor"].get<std::string>();
+    if (j.contains("m_iconOpacity")) m_iconOpacity = std::clamp(j["m_iconOpacity"].get<float>(), 0.0f, 1.0f);
 }
 
 void PotionHudModule::saveConfig(nlohmann::json& j) {
@@ -952,4 +987,7 @@ void PotionHudModule::saveConfig(nlohmann::json& j) {
     j["m_cardPadding"] = m_cardPadding;
     j["m_showHeader"] = m_showHeader;
     j["m_singleLineRow"] = m_singleLineRow;
+    j["m_showRowCapsule"] = m_showRowCapsule;
+    j["m_rowCapsuleColor"] = m_rowCapsuleColor;
+    j["m_iconOpacity"] = m_iconOpacity;
 }
