@@ -217,6 +217,25 @@ void flushImages(void* context) {
         context, color, 1.0f, material);
 }
 
+// Draws a solid UI rect in the same pass as effect icons so the card sits
+// UNDER the native textures (mod-menu DrawCommands always composite on top).
+void fillRectangle(void* context, const RectangleArea& area, const Color& color) {
+    void** vtable = getVtable(context);
+    if (!vtable || !vtable[bedrocktools::sdk::offsets::VTable::MinecraftUIRenderContextFillRectangle]) return;
+    using Fn = void (*)(void*, const RectangleArea&, const Color&);
+    reinterpret_cast<Fn>(vtable[bedrocktools::sdk::offsets::VTable::MinecraftUIRenderContextFillRectangle])(
+        context, area, color);
+}
+
+Color colorFromArgb(std::uint32_t argb) {
+    return Color{
+        static_cast<float>((argb >> 16) & 0xFFu) / 255.0f,
+        static_cast<float>((argb >> 8) & 0xFFu) / 255.0f,
+        static_cast<float>(argb & 0xFFu) / 255.0f,
+        static_cast<float>((argb >> 24) & 0xFFu) / 255.0f,
+    };
+}
+
 std::uint32_t parseColor(const std::string& value, std::uint32_t fallback) {
     if (value.empty()) return fallback;
     const std::string hex = value[0] == '#' ? value.substr(1) : value;
@@ -728,28 +747,52 @@ bool PotionHudModule::renderNative(void* context, void* client) {
         ? std::max(headerIconSize, textSize) + padding * 0.85f
         : 0.0f;
     const float rowStartY = config.hudPosY + headerHeight;
+    const float contentWidth = icon + (config.showText ? gap + textWidth : 0.0f);
+    const float cardInnerWidth = std::max(contentWidth,
+        config.showHeader ? headerIconSize + gap + static_cast<float>(std::string("Potions").size()) * textSize * 0.56f : 0.0f);
+    const std::size_t rowCount = std::max<std::size_t>(1, effects.size());
+    const float contentHeight = rowHeight + static_cast<float>(rowCount - 1) * rowStride;
 
-    // When the custom card overlay is enabled, do NOT draw native textures
-    // here. That pass runs under the mod-menu DrawCommands, so the card
-    // would cover the icons (they looked "behind" the panel). Icons are
-    // drawn later as DrawCommand images on top of the card instead.
-    const bool drawNativeHere = !config.showCard;
+    // Draw the card background in THIS pass (under the icons). Mod-menu
+    // DrawCommands always composite above the game HUD, so a card drawn
+    // there covers native effect textures. Native fill + native icons keep
+    // real coloured icons visible inside the panel.
+    if (config.showCard && !effects.empty()) {
+        const float cardX = config.hudPosX - padding;
+        const float cardY = config.hudPosY - padding;
+        const float cardW = cardInnerWidth + padding * 2.0f;
+        const float cardH = headerHeight + contentHeight + padding * 2.0f;
+        RectangleArea cardArea{
+            full.x0 + cardX / scaleX,
+            full.x0 + (cardX + cardW) / scaleX,
+            full.y0 + cardY / scaleY,
+            full.y0 + (cardY + cardH) / scaleY,
+        };
+        if (validRectangle(cardArea)) {
+            fillRectangle(context, cardArea, colorFromArgb(config.cardColor));
+        }
+    }
 
     for (std::size_t row = 0; row < effects.size(); ++row) {
         const std::size_t source = config.bottomUp ? effects.size() - 1 - row : row;
         RuntimeEffect& effect = effects[source];
-        if (!drawNativeHere) {
+        if (!usesNativeTexture(effect.id)) {
             effect.nativeIcon = false;
             continue;
         }
-        if (!usesNativeTexture(effect.id)) continue;
         const std::string_view path = effectTexturePath(effect.id);
-        if (path.empty()) continue;
+        if (path.empty()) {
+            effect.nativeIcon = false;
+            continue;
+        }
 
         TexturePtr texture = getTexture(context, ResourceLocation(path));
-        if (!texture.clientTexture) continue;
+        if (!texture.clientTexture) {
+            effect.nativeIcon = false;
+            continue;
+        }
 
-        // Vertically center the icon in its row, inside the card content area.
+        // Vertically center the icon in its row, on top of the native card fill.
         const float ySurface = rowStartY + static_cast<float>(row) * rowStride + (rowStride - icon) * 0.5f;
         const float xUi = full.x0 + iconSurfaceX / scaleX;
         const float yUi = full.y0 + ySurface / scaleY;
@@ -881,9 +924,9 @@ void PotionHudModule::onFrame() {
     };
 
     if (config.showCard && hasEffects) {
-        // Soft glow halo - NOT a real backdrop blur (see the field comment
-        // in potionhud.hpp for why), just layered fainter/larger copies of
-        // the card behind it to fake a blurred edge.
+        // Solid card fill is drawn natively (under the effect icons) in
+        // renderNative(). Drawing another opaque fill here would cover the
+        // real coloured icons again. Only keep soft edge / outline on top.
         if (config.blurAmount > 0.001f) {
             constexpr int layers = 3;
             for (int i = layers; i >= 1; --i) {
@@ -899,8 +942,6 @@ void PotionHudModule::onFrame() {
                     cardWidth + outlineThicknessPx * 2.0f, cardHeight + outlineThicknessPx * 2.0f,
                     cardRadiusPx + outlineThicknessPx, config.outlineColor);
         }
-
-        addRect(cardX, cardY, cardWidth, cardHeight, cardRadiusPx, config.cardColor);
     }
 
     if (config.showHeader && hasEffects) {
@@ -935,14 +976,15 @@ void PotionHudModule::onFrame() {
             ? -1
             : effect.duration / 20;
         const bool expiring = remainingSeconds >= 0 && remainingSeconds <= WarningSeconds;
-        // Shake intensifies as time runs out (strongest under 5s).
+        // Gentle horizontal sway when expiring — slow and small so text stays readable.
         float shakeX = 0.0f;
         float expireFade = 1.0f;
         if (config.animate && expiring) {
             const float urgency = 1.0f - static_cast<float>(remainingSeconds) / static_cast<float>(WarningSeconds);
-            const float shakeAmp = (1.2f + 2.4f * urgency) * config.uiScale * surfaceScale;
-            // ~12 Hz horizontal shake
-            shakeX = std::sin(static_cast<float>(now) * 0.075f + static_cast<float>(effect.id) * 1.7f) * shakeAmp;
+            // ~0.4–0.9 px at default scale; only a little stronger near 0s
+            const float shakeAmp = (0.35f + 0.55f * urgency) * config.uiScale * surfaceScale;
+            // ~2 Hz — slow enough to read through
+            shakeX = std::sin(static_cast<float>(now) * 0.012f + static_cast<float>(effect.id) * 1.7f) * shakeAmp;
             // Final second: fade out before the effect disappears
             if (remainingSeconds <= 1) {
                 const int ticksLeft = std::max(0, effect.duration);
