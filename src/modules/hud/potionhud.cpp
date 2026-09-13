@@ -12,7 +12,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <iterator>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -596,7 +598,14 @@ PotionHudModule::ConfigSnapshot PotionHudModule::snapshotConfig() const {
         m_singleLineRow,
         m_showRowCapsule,
         parseColor(m_rowCapsuleColor, 0x26FFFFFFu),
-        m_iconOpacity
+        m_iconOpacity,
+        m_rowGap,
+        m_showOutline,
+        parseColor(m_outlineColor, 0x66C8C8C8u),
+        m_outlineThickness,
+        m_blurAmount,
+        m_animate,
+        m_animationDurationMs
     };
 }
 
@@ -781,9 +790,48 @@ void PotionHudModule::onFrame() {
     // don't shift.
     const float rowStartY = config.hudPosY + headerHeight;
     const float iconX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
+    const float cardRadiusPx = config.cardRadius * config.uiScale * surfaceScale;
+    const float outlineThicknessPx = config.outlineThickness * config.uiScale * surfaceScale;
+
+    // Animation bookkeeping: remember when each effect id first appeared so
+    // rows can fade/slide in instead of popping in solid. Keyed by effect
+    // id, which is safe here because the local player can only have one
+    // active instance of a given effect type at a time.
+    const auto nowMs = []() -> std::int64_t {
+        using namespace std::chrono;
+        return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+    };
+    const std::int64_t now = nowMs();
+    if (config.animate) {
+        for (const auto& effect : effects) {
+            m_effectFirstSeenMs.try_emplace(effect.id, now);
+        }
+        for (auto it = m_effectFirstSeenMs.begin(); it != m_effectFirstSeenMs.end();) {
+            const bool stillActive = std::any_of(effects.begin(), effects.end(),
+                [&](const RuntimeEffect& e) { return e.id == it->first; });
+            it = stillActive ? std::next(it) : m_effectFirstSeenMs.erase(it);
+        }
+    } else if (!m_effectFirstSeenMs.empty()) {
+        m_effectFirstSeenMs.clear();
+    }
+
+    auto animProgress = [&](std::uint32_t effectId) -> float {
+        if (!config.animate || config.animationDurationMs <= 0.0f) return 1.0f;
+        const auto it = m_effectFirstSeenMs.find(effectId);
+        if (it == m_effectFirstSeenMs.end()) return 1.0f;
+        const float t = static_cast<float>(now - it->second) / config.animationDurationMs;
+        const float clamped = std::clamp(t, 0.0f, 1.0f);
+        return 1.0f - (1.0f - clamped) * (1.0f - clamped); // ease-out
+    };
+
+    auto scaleAlpha = [](std::uint32_t color, float factor) -> std::uint32_t {
+        const std::uint32_t alpha = (color >> 24) & 0xFFu;
+        const std::uint32_t scaled = static_cast<std::uint32_t>(std::clamp(static_cast<float>(alpha) * factor, 0.0f, 255.0f));
+        return (scaled << 24) | (color & 0x00FFFFFFu);
+    };
 
     std::vector<pl::modmenu::DrawCommand> commands;
-    commands.reserve(effects.size() * 6 + 3);
+    commands.reserve(effects.size() * 8 + 8);
 
     auto addText = [&](float x, float y, float widthMode, float size, std::uint32_t color, std::string text) {
         pl::modmenu::DrawCommand command;
@@ -797,16 +845,39 @@ void PotionHudModule::onFrame() {
         commands.push_back(std::move(command));
     };
 
+    auto addRect = [&](float x, float y, float w, float h, float radius, std::uint32_t color) {
+        pl::modmenu::DrawCommand rect;
+        rect.type = pl::modmenu::DrawCommandType::RectFilled;
+        rect.x = x;
+        rect.y = y;
+        rect.w = w;
+        rect.h = h;
+        rect.x3 = radius;
+        rect.color = color;
+        commands.push_back(rect);
+    };
+
     if (config.showCard && hasEffects) {
-        pl::modmenu::DrawCommand card;
-        card.type = pl::modmenu::DrawCommandType::RectFilled;
-        card.x = cardX;
-        card.y = cardY;
-        card.w = cardWidth;
-        card.h = cardHeight;
-        card.x3 = config.cardRadius * config.uiScale * surfaceScale; // rounded corners, same field breakindicator.cpp uses
-        card.color = config.cardColor;
-        commands.push_back(card);
+        // Soft glow halo - NOT a real backdrop blur (see the field comment
+        // in potionhud.hpp for why), just layered fainter/larger copies of
+        // the card behind it to fake a blurred edge.
+        if (config.blurAmount > 0.001f) {
+            constexpr int layers = 3;
+            for (int i = layers; i >= 1; --i) {
+                const float spread = (padding * 0.6f) * config.blurAmount * (static_cast<float>(i) / layers);
+                const float layerAlpha = (config.blurAmount * 0.12f) / static_cast<float>(i);
+                addRect(cardX - spread, cardY - spread, cardWidth + spread * 2.0f, cardHeight + spread * 2.0f,
+                        cardRadiusPx + spread, scaleAlpha(0xFF000000u, layerAlpha));
+            }
+        }
+
+        if (config.showOutline && outlineThicknessPx > 0.01f) {
+            addRect(cardX - outlineThicknessPx, cardY - outlineThicknessPx,
+                    cardWidth + outlineThicknessPx * 2.0f, cardHeight + outlineThicknessPx * 2.0f,
+                    cardRadiusPx + outlineThicknessPx, config.outlineColor);
+        }
+
+        addRect(cardX, cardY, cardWidth, cardHeight, cardRadiusPx, config.cardColor);
     }
 
     if (config.showHeader && hasEffects) {
@@ -833,24 +904,29 @@ void PotionHudModule::onFrame() {
         const RuntimeEffect& effect = effects[source];
         const float rowY = rowStartY + static_cast<float>(row) * rowStride;
 
+        // Fade + slide-up entrance for newly-appeared effects.
+        const float anim = animProgress(effect.id);
+        const float animatedRowY = rowY + (1.0f - anim) * (padding * 0.8f);
+
         // Nested "pill" capsule for this row, matching the reference's two
         // layers of rounding (outer card + lighter inner capsule per row).
+        // Height is tied to rowStride (minus rowGap) instead of being sized
+        // independently, so consecutive capsules can no longer overlap/merge
+        // regardless of icon or text metrics.
         const float capsuleX = config.hudPosX - padding * 0.4f;
-        const float capsuleY = rowY - padding * 0.3f;
         const float capsuleWidth = cardInnerWidth + padding * 0.8f;
-        const float capsuleHeight = std::max(icon, textSize + timerSize * 0.6f) + padding * 0.6f;
+        const float capsuleHeight = std::max(1.0f, rowStride - config.rowGap * config.uiScale * surfaceScale);
+        const float capsuleY = animatedRowY + (rowStride - capsuleHeight) * 0.5f;
+        const float capsuleRadiusPx = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
         const float capsuleRightInnerX = capsuleX + capsuleWidth - padding * 0.5f;
 
         if (config.showRowCapsule) {
-            pl::modmenu::DrawCommand capsule;
-            capsule.type = pl::modmenu::DrawCommandType::RectFilled;
-            capsule.x = capsuleX;
-            capsule.y = capsuleY;
-            capsule.w = capsuleWidth;
-            capsule.h = capsuleHeight;
-            capsule.x3 = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
-            capsule.color = config.rowCapsuleColor;
-            commands.push_back(capsule);
+            if (config.showOutline && outlineThicknessPx > 0.01f) {
+                addRect(capsuleX - outlineThicknessPx, capsuleY - outlineThicknessPx,
+                        capsuleWidth + outlineThicknessPx * 2.0f, capsuleHeight + outlineThicknessPx * 2.0f,
+                        capsuleRadiusPx + outlineThicknessPx, scaleAlpha(config.outlineColor, anim));
+            }
+            addRect(capsuleX, capsuleY, capsuleWidth, capsuleHeight, capsuleRadiusPx, scaleAlpha(config.rowCapsuleColor, anim));
         }
 
         // Icon sits behind the text, inside the capsule bounds (not off to
@@ -858,7 +934,7 @@ void PotionHudModule::onFrame() {
         // rather than a separate icon slot, and pushed BEFORE the text
         // commands below so it's layered underneath.
         if (!effect.nativeIcon) {
-            const std::uint8_t iconAlpha = static_cast<std::uint8_t>(std::clamp(config.iconOpacity, 0.0f, 1.0f) * 255.0f);
+            const std::uint8_t iconAlpha = static_cast<std::uint8_t>(std::clamp(config.iconOpacity, 0.0f, 1.0f) * anim * 255.0f);
             pl::modmenu::DrawCommand image;
             image.type = pl::modmenu::DrawCommandType::Image;
             image.x = capsuleX + padding * 0.3f;
@@ -875,33 +951,34 @@ void PotionHudModule::onFrame() {
         const float textX = left ? config.hudPosX + textWidth : iconX + icon + gap;
         const float widthMode = left ? -1.0f : 0.0f;
         const bool expiring = !effect.noCounter && effect.duration != -1 && effect.duration / 20 <= WarningSeconds;
-        const std::uint32_t effectColor = expiring ? config.lowColor : config.mainColor;
+        const std::uint32_t effectColor = scaleAlpha(expiring ? config.lowColor : config.mainColor, anim);
+        const std::uint32_t shadowColor = scaleAlpha(config.shadowColor, anim);
         const std::string timer = formatDuration(effect.duration, effect.noCounter);
 
         if (config.showTitle && config.singleLineRow) {
             // "Invisibility 1          13:47" - one line, name left, timer
             // right-aligned to this row's own capsule, not the outer card.
             const std::string title = titleForEffect(effect, config);
-            const float lineY = rowY + icon * 0.5f + textSize * 0.35f;
+            const float lineY = animatedRowY + capsuleHeight * 0.5f + textSize * 0.35f;
             if (config.textShadow) {
-                addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, config.shadowColor, title);
-                addText(capsuleRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, config.shadowColor, timer);
+                addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, shadowColor, title);
+                addText(capsuleRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, shadowColor, timer);
             }
             addText(textX, lineY, widthMode, textSize, effectColor, title);
             addText(capsuleRightInnerX, lineY, -1.0f, timerSize, effectColor, timer);
         } else if (config.showTitle) {
             const std::string title = titleForEffect(effect, config);
-            const float titleY = rowY + textSize;
-            const float timerY = rowY + textSize + timerSize * 1.05f;
+            const float titleY = animatedRowY + textSize;
+            const float timerY = animatedRowY + textSize + timerSize * 1.05f;
             if (config.textShadow) {
-                addText(textX + shadowOffset, titleY + shadowOffset, widthMode, textSize, config.shadowColor, title);
-                addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, config.shadowColor, timer);
+                addText(textX + shadowOffset, titleY + shadowOffset, widthMode, textSize, shadowColor, title);
+                addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, shadowColor, timer);
             }
             addText(textX, titleY, widthMode, textSize, effectColor, title);
             addText(textX, timerY, widthMode, timerSize, effectColor, timer);
         } else {
-            const float timerY = rowY + icon * 0.5f + timerSize * 0.35f;
-            if (config.textShadow) addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, config.shadowColor, timer);
+            const float timerY = animatedRowY + icon * 0.5f + timerSize * 0.35f;
+            if (config.textShadow) addText(textX + shadowOffset, timerY + shadowOffset, widthMode, timerSize, shadowColor, timer);
             addText(textX, timerY, widthMode, timerSize, effectColor, timer);
         }
     }
@@ -952,6 +1029,13 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_showRowCapsule")) m_showRowCapsule = j["m_showRowCapsule"].get<bool>();
     if (j.contains("m_rowCapsuleColor")) m_rowCapsuleColor = j["m_rowCapsuleColor"].get<std::string>();
     if (j.contains("m_iconOpacity")) m_iconOpacity = std::clamp(j["m_iconOpacity"].get<float>(), 0.0f, 1.0f);
+    if (j.contains("m_rowGap")) m_rowGap = std::clamp(j["m_rowGap"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_showOutline")) m_showOutline = j["m_showOutline"].get<bool>();
+    if (j.contains("m_outlineColor")) m_outlineColor = j["m_outlineColor"].get<std::string>();
+    if (j.contains("m_outlineThickness")) m_outlineThickness = std::clamp(j["m_outlineThickness"].get<float>(), 0.0f, 10.0f);
+    if (j.contains("m_blurAmount")) m_blurAmount = std::clamp(j["m_blurAmount"].get<float>(), 0.0f, 1.0f);
+    if (j.contains("m_animate")) m_animate = j["m_animate"].get<bool>();
+    if (j.contains("m_animationDurationMs")) m_animationDurationMs = std::clamp(j["m_animationDurationMs"].get<float>(), 0.0f, 2000.0f);
 }
 
 void PotionHudModule::saveConfig(nlohmann::json& j) {
@@ -990,4 +1074,11 @@ void PotionHudModule::saveConfig(nlohmann::json& j) {
     j["m_showRowCapsule"] = m_showRowCapsule;
     j["m_rowCapsuleColor"] = m_rowCapsuleColor;
     j["m_iconOpacity"] = m_iconOpacity;
+    j["m_rowGap"] = m_rowGap;
+    j["m_showOutline"] = m_showOutline;
+    j["m_outlineColor"] = m_outlineColor;
+    j["m_outlineThickness"] = m_outlineThickness;
+    j["m_blurAmount"] = m_blurAmount;
+    j["m_animate"] = m_animate;
+    j["m_animationDurationMs"] = m_animationDurationMs;
 }

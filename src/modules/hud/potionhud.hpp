@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 class PotionHudModule : public Module {
@@ -62,6 +63,13 @@ private:
         bool showRowCapsule;
         std::uint32_t rowCapsuleColor;
         float iconOpacity;
+        float rowGap;
+        bool showOutline;
+        std::uint32_t outlineColor;
+        float outlineThickness;
+        float blurAmount;
+        bool animate;
+        float animationDurationMs;
     };
 
     ConfigSnapshot snapshotConfig() const;
@@ -120,4 +128,23 @@ private:
     bool m_showRowCapsule = true;
     std::string m_rowCapsuleColor = "#26FFFFFF";
     float m_iconOpacity = 0.45f;
+    float m_rowGap = 4.0f; // px between capsules before scaling - fixes them merging together
+
+    // Outline - there's no dedicated stroke/border draw type in this API,
+    // so this uses the same "bigger rect behind, smaller rect in front"
+    // trick breakindicator.cpp already uses elsewhere in this codebase.
+    bool m_showOutline = true;
+    std::string m_outlineColor = "#66C8C8C8";
+    float m_outlineThickness = 1.5f;
+
+    // NOT a true backdrop/gaussian blur - there's no blur or shader draw
+    // command anywhere in this draw API to do that with. This fakes a soft
+    // glow around the card's edge by layering progressively larger, fainter
+    // copies of the card behind it. Closest honest approximation available.
+    float m_blurAmount = 0.4f;
+
+    // New effects fade + slide in instead of popping in solid.
+    bool m_animate = true;
+    float m_animationDurationMs = 220.0f;
+    std::unordered_map<std::uint32_t, std::int64_t> m_effectFirstSeenMs;
 };
