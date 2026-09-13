@@ -29,10 +29,45 @@ constexpr const char* MinecraftLibrary = "libminecraftpe.so";
 constexpr std::size_t MaxEffects = 64;
 constexpr float VanillaEffectSize = 16.0f;
 constexpr int WarningSeconds = 5;
-constexpr const char* InstantHealthImageId = "bedrocktools.potionhud.instant_health";
-constexpr const char* InstantDamageImageId = "bedrocktools.potionhud.instant_damage";
-constexpr const char* SaturationImageId = "bedrocktools.potionhud.saturation";
 constexpr const char* GenericPotionImageId = "bedrocktools.potionhud.generic";
+// Per-effect monochrome icons (registered in onInit).
+constexpr const char* ImgSpeed = "bedrocktools.potionhud.speed";
+constexpr const char* ImgSlowness = "bedrocktools.potionhud.slowness";
+constexpr const char* ImgHaste = "bedrocktools.potionhud.haste";
+constexpr const char* ImgMiningFatigue = "bedrocktools.potionhud.mining_fatigue";
+constexpr const char* ImgStrength = "bedrocktools.potionhud.strength";
+constexpr const char* ImgInstantHealth = "bedrocktools.potionhud.instant_health";
+constexpr const char* ImgInstantDamage = "bedrocktools.potionhud.instant_damage";
+constexpr const char* ImgJumpBoost = "bedrocktools.potionhud.jump_boost";
+constexpr const char* ImgNausea = "bedrocktools.potionhud.nausea";
+constexpr const char* ImgRegeneration = "bedrocktools.potionhud.regeneration";
+constexpr const char* ImgResistance = "bedrocktools.potionhud.resistance";
+constexpr const char* ImgFireResistance = "bedrocktools.potionhud.fire_resistance";
+constexpr const char* ImgWaterBreathing = "bedrocktools.potionhud.water_breathing";
+constexpr const char* ImgInvisibility = "bedrocktools.potionhud.invisibility";
+constexpr const char* ImgBlindness = "bedrocktools.potionhud.blindness";
+constexpr const char* ImgNightVision = "bedrocktools.potionhud.night_vision";
+constexpr const char* ImgHunger = "bedrocktools.potionhud.hunger";
+constexpr const char* ImgWeakness = "bedrocktools.potionhud.weakness";
+constexpr const char* ImgPoison = "bedrocktools.potionhud.poison";
+constexpr const char* ImgWither = "bedrocktools.potionhud.wither";
+constexpr const char* ImgHealthBoost = "bedrocktools.potionhud.health_boost";
+constexpr const char* ImgAbsorption = "bedrocktools.potionhud.absorption";
+constexpr const char* ImgSaturation = "bedrocktools.potionhud.saturation";
+constexpr const char* ImgLevitation = "bedrocktools.potionhud.levitation";
+constexpr const char* ImgFatalPoison = "bedrocktools.potionhud.fatal_poison";
+constexpr const char* ImgConduitPower = "bedrocktools.potionhud.conduit_power";
+constexpr const char* ImgSlowFalling = "bedrocktools.potionhud.slow_falling";
+constexpr const char* ImgBadOmen = "bedrocktools.potionhud.bad_omen";
+constexpr const char* ImgVillageHero = "bedrocktools.potionhud.village_hero";
+constexpr const char* ImgDarkness = "bedrocktools.potionhud.darkness";
+constexpr const char* ImgTrialOmen = "bedrocktools.potionhud.trial_omen";
+constexpr const char* ImgWindCharged = "bedrocktools.potionhud.wind_charged";
+constexpr const char* ImgWeaving = "bedrocktools.potionhud.weaving";
+constexpr const char* ImgOozing = "bedrocktools.potionhud.oozing";
+constexpr const char* ImgInfested = "bedrocktools.potionhud.infested";
+constexpr const char* ImgRaidOmen = "bedrocktools.potionhud.raid_omen";
+constexpr const char* ImgBreathNautilus = "bedrocktools.potionhud.breath_nautilus";
 struct RectangleArea {
     float x0;
     float x1;
@@ -340,10 +375,46 @@ bool usesNativeTexture(std::uint32_t id) {
 }
 
 const char* fallbackImageId(std::uint32_t id) {
-    if (id == static_cast<std::uint32_t>(MobEffectType::InstantHealth)) return InstantHealthImageId;
-    if (id == static_cast<std::uint32_t>(MobEffectType::InstantDamage)) return InstantDamageImageId;
-    if (id == static_cast<std::uint32_t>(MobEffectType::Saturation)) return SaturationImageId;
-    return GenericPotionImageId;
+    switch (static_cast<MobEffectType>(id)) {
+        case MobEffectType::Speed: return ImgSpeed;
+        case MobEffectType::Slowness: return ImgSlowness;
+        case MobEffectType::Haste: return ImgHaste;
+        case MobEffectType::MiningFatigue: return ImgMiningFatigue;
+        case MobEffectType::Strength: return ImgStrength;
+        case MobEffectType::InstantHealth: return ImgInstantHealth;
+        case MobEffectType::InstantDamage: return ImgInstantDamage;
+        case MobEffectType::JumpBoost: return ImgJumpBoost;
+        case MobEffectType::Nausea: return ImgNausea;
+        case MobEffectType::Regeneration: return ImgRegeneration;
+        case MobEffectType::Resistance: return ImgResistance;
+        case MobEffectType::FireResistance: return ImgFireResistance;
+        case MobEffectType::WaterBreathing: return ImgWaterBreathing;
+        case MobEffectType::Invisibility: return ImgInvisibility;
+        case MobEffectType::Blindness: return ImgBlindness;
+        case MobEffectType::NightVision: return ImgNightVision;
+        case MobEffectType::Hunger: return ImgHunger;
+        case MobEffectType::Weakness: return ImgWeakness;
+        case MobEffectType::Poison: return ImgPoison;
+        case MobEffectType::Wither: return ImgWither;
+        case MobEffectType::HealthBoost: return ImgHealthBoost;
+        case MobEffectType::Absorption: return ImgAbsorption;
+        case MobEffectType::Saturation: return ImgSaturation;
+        case MobEffectType::Levitation: return ImgLevitation;
+        case MobEffectType::FatalPoison: return ImgFatalPoison;
+        case MobEffectType::ConduitPower: return ImgConduitPower;
+        case MobEffectType::SlowFalling: return ImgSlowFalling;
+        case MobEffectType::BadOmen: return ImgBadOmen;
+        case MobEffectType::VillageHero: return ImgVillageHero;
+        case MobEffectType::Darkness: return ImgDarkness;
+        case MobEffectType::TrialOmen: return ImgTrialOmen;
+        case MobEffectType::WindCharged: return ImgWindCharged;
+        case MobEffectType::Weaving: return ImgWeaving;
+        case MobEffectType::Oozing: return ImgOozing;
+        case MobEffectType::Infested: return ImgInfested;
+        case MobEffectType::RaidOmen: return ImgRaidOmen;
+        case MobEffectType::BreathOfTheNautilus: return ImgBreathNautilus;
+        default: return GenericPotionImageId;
+    }
 }
 
 std::string romanNumeral(int value) {
@@ -407,10 +478,48 @@ PotionHudModule::~PotionHudModule() {
 }
 
 void PotionHudModule::onInit() {
-    pl::modmenu::registerImage(InstantHealthImageId, potionhud_assets::InstantHealthPixels, potionhud_assets::InstantHealthWidth, potionhud_assets::InstantHealthHeight);
-    pl::modmenu::registerImage(InstantDamageImageId, potionhud_assets::InstantDamagePixels, potionhud_assets::InstantDamageWidth, potionhud_assets::InstantDamageHeight);
-    pl::modmenu::registerImage(SaturationImageId, potionhud_assets::SaturationPixels, potionhud_assets::SaturationWidth, potionhud_assets::SaturationHeight);
-    pl::modmenu::registerImage(GenericPotionImageId, potionhud_assets::GenericPotionPixels, potionhud_assets::GenericPotionWidth, potionhud_assets::GenericPotionHeight);
+    // Unique monochrome icon per effect (drawn on top of the card).
+    auto reg = [](const char* id, const auto& pixels, int w, int h) {
+        pl::modmenu::registerImage(id, pixels, w, h);
+    };
+    reg(ImgSpeed, potionhud_assets::SpeedPixels, potionhud_assets::SpeedWidth, potionhud_assets::SpeedHeight);
+    reg(ImgSlowness, potionhud_assets::SlownessPixels, potionhud_assets::SlownessWidth, potionhud_assets::SlownessHeight);
+    reg(ImgHaste, potionhud_assets::HastePixels, potionhud_assets::HasteWidth, potionhud_assets::HasteHeight);
+    reg(ImgMiningFatigue, potionhud_assets::MiningFatiguePixels, potionhud_assets::MiningFatigueWidth, potionhud_assets::MiningFatigueHeight);
+    reg(ImgStrength, potionhud_assets::StrengthPixels, potionhud_assets::StrengthWidth, potionhud_assets::StrengthHeight);
+    reg(ImgInstantHealth, potionhud_assets::InstantHealthPixels, potionhud_assets::InstantHealthWidth, potionhud_assets::InstantHealthHeight);
+    reg(ImgInstantDamage, potionhud_assets::InstantDamagePixels, potionhud_assets::InstantDamageWidth, potionhud_assets::InstantDamageHeight);
+    reg(ImgJumpBoost, potionhud_assets::JumpBoostPixels, potionhud_assets::JumpBoostWidth, potionhud_assets::JumpBoostHeight);
+    reg(ImgNausea, potionhud_assets::NauseaPixels, potionhud_assets::NauseaWidth, potionhud_assets::NauseaHeight);
+    reg(ImgRegeneration, potionhud_assets::RegenerationPixels, potionhud_assets::RegenerationWidth, potionhud_assets::RegenerationHeight);
+    reg(ImgResistance, potionhud_assets::ResistancePixels, potionhud_assets::ResistanceWidth, potionhud_assets::ResistanceHeight);
+    reg(ImgFireResistance, potionhud_assets::FireResistancePixels, potionhud_assets::FireResistanceWidth, potionhud_assets::FireResistanceHeight);
+    reg(ImgWaterBreathing, potionhud_assets::WaterBreathingPixels, potionhud_assets::WaterBreathingWidth, potionhud_assets::WaterBreathingHeight);
+    reg(ImgInvisibility, potionhud_assets::InvisibilityPixels, potionhud_assets::InvisibilityWidth, potionhud_assets::InvisibilityHeight);
+    reg(ImgBlindness, potionhud_assets::BlindnessPixels, potionhud_assets::BlindnessWidth, potionhud_assets::BlindnessHeight);
+    reg(ImgNightVision, potionhud_assets::NightVisionPixels, potionhud_assets::NightVisionWidth, potionhud_assets::NightVisionHeight);
+    reg(ImgHunger, potionhud_assets::HungerPixels, potionhud_assets::HungerWidth, potionhud_assets::HungerHeight);
+    reg(ImgWeakness, potionhud_assets::WeaknessPixels, potionhud_assets::WeaknessWidth, potionhud_assets::WeaknessHeight);
+    reg(ImgPoison, potionhud_assets::PoisonPixels, potionhud_assets::PoisonWidth, potionhud_assets::PoisonHeight);
+    reg(ImgWither, potionhud_assets::WitherPixels, potionhud_assets::WitherWidth, potionhud_assets::WitherHeight);
+    reg(ImgHealthBoost, potionhud_assets::HealthBoostPixels, potionhud_assets::HealthBoostWidth, potionhud_assets::HealthBoostHeight);
+    reg(ImgAbsorption, potionhud_assets::AbsorptionPixels, potionhud_assets::AbsorptionWidth, potionhud_assets::AbsorptionHeight);
+    reg(ImgSaturation, potionhud_assets::SaturationPixels, potionhud_assets::SaturationWidth, potionhud_assets::SaturationHeight);
+    reg(ImgLevitation, potionhud_assets::LevitationPixels, potionhud_assets::LevitationWidth, potionhud_assets::LevitationHeight);
+    reg(ImgFatalPoison, potionhud_assets::FatalPoisonPixels, potionhud_assets::FatalPoisonWidth, potionhud_assets::FatalPoisonHeight);
+    reg(ImgConduitPower, potionhud_assets::ConduitPowerPixels, potionhud_assets::ConduitPowerWidth, potionhud_assets::ConduitPowerHeight);
+    reg(ImgSlowFalling, potionhud_assets::SlowFallingPixels, potionhud_assets::SlowFallingWidth, potionhud_assets::SlowFallingHeight);
+    reg(ImgBadOmen, potionhud_assets::BadOmenPixels, potionhud_assets::BadOmenWidth, potionhud_assets::BadOmenHeight);
+    reg(ImgVillageHero, potionhud_assets::VillageHeroPixels, potionhud_assets::VillageHeroWidth, potionhud_assets::VillageHeroHeight);
+    reg(ImgDarkness, potionhud_assets::DarknessPixels, potionhud_assets::DarknessWidth, potionhud_assets::DarknessHeight);
+    reg(ImgTrialOmen, potionhud_assets::TrialOmenPixels, potionhud_assets::TrialOmenWidth, potionhud_assets::TrialOmenHeight);
+    reg(ImgWindCharged, potionhud_assets::WindChargedPixels, potionhud_assets::WindChargedWidth, potionhud_assets::WindChargedHeight);
+    reg(ImgWeaving, potionhud_assets::WeavingPixels, potionhud_assets::WeavingWidth, potionhud_assets::WeavingHeight);
+    reg(ImgOozing, potionhud_assets::OozingPixels, potionhud_assets::OozingWidth, potionhud_assets::OozingHeight);
+    reg(ImgInfested, potionhud_assets::InfestedPixels, potionhud_assets::InfestedWidth, potionhud_assets::InfestedHeight);
+    reg(ImgRaidOmen, potionhud_assets::RaidOmenPixels, potionhud_assets::RaidOmenWidth, potionhud_assets::RaidOmenHeight);
+    reg(ImgBreathNautilus, potionhud_assets::BreathOfTheNautilusPixels, potionhud_assets::BreathOfTheNautilusWidth, potionhud_assets::BreathOfTheNautilusHeight);
+    reg(GenericPotionImageId, potionhud_assets::GenericPotionPixels, potionhud_assets::GenericPotionWidth, potionhud_assets::GenericPotionHeight);
 
     const std::uintptr_t renderer = pl::memory::resolveVtableFunction(
         "21HudMobEffectsRenderer",
@@ -812,36 +921,18 @@ bool PotionHudModule::renderNative(void* context, void* client) {
         }
     }
 
-    for (std::size_t row = 0; row < effects.size(); ++row) {
-        const std::size_t source = config.bottomUp ? effects.size() - 1 - row : row;
-        RuntimeEffect& effect = effects[source];
-        if (!usesNativeTexture(effect.id)) {
-            effect.nativeIcon = false;
-            continue;
-        }
-        const std::string_view path = effectTexturePath(effect.id);
-        if (path.empty()) {
-            effect.nativeIcon = false;
-            continue;
-        }
-
-        TexturePtr texture = getTexture(context, ResourceLocation(path));
-        if (!texture.clientTexture) {
-            effect.nativeIcon = false;
-            continue;
-        }
-
-        // Vertically center the icon in its row, on top of the native card fill.
-        const float ySurface = rowStartY + static_cast<float>(row) * rowStride + (rowStride - icon) * 0.5f;
-        const float xUi = full.x0 + iconSurfaceX / scaleX;
-        const float yUi = full.y0 + ySurface / scaleY;
-        const float widthUi = icon / scaleX;
-        const float heightUi = icon / scaleY;
-        if (!std::isfinite(xUi) || !std::isfinite(yUi) || !std::isfinite(widthUi) || !std::isfinite(heightUi)) continue;
-        drawImage(context, texture.getClientTexture(), {xUi, yUi}, {widthUi, heightUi});
-        flushImages(context);
-        effect.nativeIcon = true;
+    // Custom monochrome icons are drawn on the overlay. Skip vanilla
+    // effect textures entirely so they never peek through the card.
+    for (auto& effect : effects) {
+        effect.nativeIcon = false;
     }
+    (void)rowStartY;
+    (void)iconSurfaceX;
+    (void)scaleX;
+    (void)scaleY;
+    (void)full;
+    (void)icon;
+    (void)rowStride;
 
     {
         std::lock_guard lock(m_runtimeMutex);
