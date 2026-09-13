@@ -111,37 +111,35 @@ private:
     bool m_snapToElements = true;
     bool m_snapToScreenCenter = true;
 
-    // Card/header styling to match a widget-card look (dark rounded
-    // background, flask icon + "Active Potions" header, name+timer on one
-    // line). Purely additive - existing layout options above still work
-    // exactly as before when showCard/showHeader are turned off.
+    // Card/header styling to match the clean dark "Potions" panel:
+    // dark rounded background, potion icon + "Potions" header, name +
+    // duration on one line (∞ for permanent effects). Purely additive -
+    // existing layout options above still work when showCard/showHeader
+    // are turned off.
     bool m_showCard = true;
-    std::string m_cardColor = "#CC15151A";
-    float m_cardRadius = 10.0f;
-    float m_cardPadding = 10.0f;
+    std::string m_cardColor = "#E0121218";
+    float m_cardRadius = 12.0f;
+    float m_cardPadding = 12.0f;
     bool m_showHeader = true;
     bool m_singleLineRow = true;
 
-    // Per-row "pill" capsule (nested rounded rect inside the card) and a
-    // faded icon sitting behind the text inside it, matching the reference
-    // more closely than a separate icon column.
-    bool m_showRowCapsule = true;
+    // Per-row "pill" capsule (optional). Off by default so the list looks
+    // like the clean reference panel (icon + name ............... timer).
+    bool m_showRowCapsule = false;
     std::string m_rowCapsuleColor = "#26FFFFFF";
-    float m_iconOpacity = 0.45f;
+    float m_iconOpacity = 1.0f;   // full opacity icons like the reference
     float m_rowGap = 4.0f; // px between capsules before scaling - fixes them merging together
 
     // Outline - there's no dedicated stroke/border draw type in this API,
     // so this uses the same "bigger rect behind, smaller rect in front"
     // trick breakindicator.cpp already uses elsewhere in this codebase.
-    bool m_showOutline = true;
+    bool m_showOutline = false;
     std::string m_outlineColor = "#66C8C8C8";
     float m_outlineThickness = 1.5f;
 
-    // NOT a true backdrop/gaussian blur - there's no blur or shader draw
-    // command anywhere in this draw API to do that with. This fakes a soft
-    // glow around the card's edge by layering progressively larger, fainter
-    // copies of the card behind it. Closest honest approximation available.
-    float m_blurAmount = 0.4f;
+    // Soft glow around the card edge (layered fainter copies). Kept subtle
+    // so the panel stays clean and solid like the reference.
+    float m_blurAmount = 0.15f;
 
     // New effects fade + slide in instead of popping in solid.
     bool m_animate = true;

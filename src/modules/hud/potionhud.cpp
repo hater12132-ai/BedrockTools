@@ -641,7 +641,10 @@ float PotionHudModule::rowSurfaceHeight(const ConfigSnapshot& config, float surf
     if (!config.showText) return icon;
     const float textSize = config.textSize * config.uiScale * surfaceScale;
     const float timerSize = textSize * 0.8f;
-    const float textHeight = config.showTitle ? textSize + timerSize * 1.15f : timerSize;
+    // Single-line mode (name + timer on one row) keeps rows compact like the reference.
+    const float textHeight = !config.showTitle
+        ? timerSize
+        : (config.singleLineRow ? textSize : textSize + timerSize * 1.15f);
     return std::max(icon, std::max(1.0f, textHeight));
 }
 
@@ -716,6 +719,15 @@ bool PotionHudModule::renderNative(void* context, void* client) {
     const float iconSurfaceX = config.hudPosX + (config.showText && config.textSide == 1 ? textWidth + gap : 0.0f);
     const float rowHeight = rowSurfaceHeight(config, surfaceScale);
     const float rowStride = rowHeight * std::max(0.25f, config.spacing);
+    const float textSize = std::max(1.0f, config.textSize * config.uiScale * surfaceScale);
+    const float padding = config.cardPadding * config.uiScale * surfaceScale;
+    // Same header offset used by the card/draw-command path so native icons
+    // sit inside the card, below the "Potions" header.
+    const float headerIconSize = config.showHeader ? textSize * 1.25f : 0.0f;
+    const float headerHeight = (config.showHeader && !effects.empty())
+        ? std::max(headerIconSize, textSize) + padding * 0.85f
+        : 0.0f;
+    const float rowStartY = config.hudPosY + headerHeight;
 
     for (std::size_t row = 0; row < effects.size(); ++row) {
         const std::size_t source = config.bottomUp ? effects.size() - 1 - row : row;
@@ -727,7 +739,8 @@ bool PotionHudModule::renderNative(void* context, void* client) {
         TexturePtr texture = getTexture(context, ResourceLocation(path));
         if (!texture.clientTexture) continue;
 
-        const float ySurface = config.hudPosY + static_cast<float>(row) * rowStride;
+        // Vertically center the icon in its row, inside the card content area.
+        const float ySurface = rowStartY + static_cast<float>(row) * rowStride + (rowStride - icon) * 0.5f;
         const float xUi = full.x0 + iconSurfaceX / scaleX;
         const float yUi = full.y0 + ySurface / scaleY;
         const float widthUi = icon / scaleX;
@@ -770,10 +783,10 @@ void PotionHudModule::onFrame() {
     // above. Content width/height reuse the exact same measurements
     // submitEditorElement() already uses, so the card always wraps the real
     // content instead of an independently-guessed size.
-    static const std::string headerText = "Active Potions";
+    static const std::string headerText = "Potions";
     const float headerTextWidth = static_cast<float>(headerText.size()) * textSize * 0.56f;
-    const float headerIconSize = config.showHeader ? textSize * 1.3f : 0.0f;
-    const float headerHeight = config.showHeader && hasEffects ? std::max(headerIconSize, textSize) + padding * 0.75f : 0.0f;
+    const float headerIconSize = config.showHeader ? textSize * 1.25f : 0.0f;
+    const float headerHeight = config.showHeader && hasEffects ? std::max(headerIconSize, textSize) + padding * 0.85f : 0.0f;
 
     const float contentWidth = icon + (config.showText ? gap + textWidth : 0.0f);
     const float cardInnerWidth = std::max(contentWidth, config.showHeader ? headerIconSize + gap + headerTextWidth : 0.0f);
@@ -888,15 +901,14 @@ void PotionHudModule::onFrame() {
         headerIcon.w = headerIconSize;
         headerIcon.h = headerIconSize;
         headerIcon.color = 0xFFFFFFFFu;
-        // Reuse the SAME bundled/registered icon the per-row fallback icon
-        // already uses (GenericPotionImageId) instead of a guessed vanilla
-        // texture path - that guess resolved to the wrong icon (a sword) on
-        // 1.26.45. This one is guaranteed to exist since it's shipped with
-        // the mod itself, not read from the game's resource pack.
+        // Bundled generic potion icon (same asset as row fallbacks) so the
+        // header always has a stable flask/bottle look matching the panel.
         headerIcon.imageId = GenericPotionImageId;
         commands.push_back(headerIcon);
 
-        addText(config.hudPosX + headerIconSize + gap, config.hudPosY + headerIconSize * 0.75f, 0.0f, textSize, config.mainColor, headerText);
+        // Vertically center the "Potions" label next to the header icon.
+        const float headerTextY = config.hudPosY + headerIconSize * 0.5f + textSize * 0.35f;
+        addText(config.hudPosX + headerIconSize + gap, headerTextY, 0.0f, textSize, config.mainColor, headerText);
     }
 
     for (std::size_t row = 0; row < effects.size(); ++row) {
@@ -908,17 +920,17 @@ void PotionHudModule::onFrame() {
         const float anim = animProgress(effect.id);
         const float animatedRowY = rowY + (1.0f - anim) * (padding * 0.8f);
 
-        // Nested "pill" capsule for this row, matching the reference's two
-        // layers of rounding (outer card + lighter inner capsule per row).
-        // Height is tied to rowStride (minus rowGap) instead of being sized
-        // independently, so consecutive capsules can no longer overlap/merge
-        // regardless of icon or text metrics.
+        // Optional per-row "pill" capsule. When off (default), layout is the
+        // clean reference style: icon | name .................... duration
         const float capsuleX = config.hudPosX - padding * 0.4f;
         const float capsuleWidth = cardInnerWidth + padding * 0.8f;
         const float capsuleHeight = std::max(1.0f, rowStride - config.rowGap * config.uiScale * surfaceScale);
         const float capsuleY = animatedRowY + (rowStride - capsuleHeight) * 0.5f;
         const float capsuleRadiusPx = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
-        const float capsuleRightInnerX = capsuleX + capsuleWidth - padding * 0.5f;
+        // Right edge used for right-aligning the timer (card edge when no capsule)
+        const float timerRightX = config.showRowCapsule
+            ? (capsuleX + capsuleWidth - padding * 0.5f)
+            : (config.hudPosX + cardInnerWidth);
 
         if (config.showRowCapsule) {
             if (config.showOutline && outlineThicknessPx > 0.01f) {
@@ -929,16 +941,15 @@ void PotionHudModule::onFrame() {
             addRect(capsuleX, capsuleY, capsuleWidth, capsuleHeight, capsuleRadiusPx, scaleAlpha(config.rowCapsuleColor, anim));
         }
 
-        // Icon sits behind the text, inside the capsule bounds (not off to
-        // the side outside it) - drawn faded so it reads as a watermark
-        // rather than a separate icon slot, and pushed BEFORE the text
-        // commands below so it's layered underneath.
+        // Effect icon - full opacity by default, left-aligned like the reference.
         if (!effect.nativeIcon) {
             const std::uint8_t iconAlpha = static_cast<std::uint8_t>(std::clamp(config.iconOpacity, 0.0f, 1.0f) * anim * 255.0f);
             pl::modmenu::DrawCommand image;
             image.type = pl::modmenu::DrawCommandType::Image;
-            image.x = capsuleX + padding * 0.3f;
-            image.y = capsuleY + (capsuleHeight - icon) * 0.5f;
+            image.x = config.showRowCapsule ? (capsuleX + padding * 0.3f) : iconX;
+            image.y = config.showRowCapsule
+                ? (capsuleY + (capsuleHeight - icon) * 0.5f)
+                : (animatedRowY + (rowStride - icon) * 0.5f);
             image.w = icon;
             image.h = icon;
             image.color = (static_cast<std::uint32_t>(iconAlpha) << 24) | 0x00FFFFFFu;
@@ -956,16 +967,18 @@ void PotionHudModule::onFrame() {
         const std::string timer = formatDuration(effect.duration, effect.noCounter);
 
         if (config.showTitle && config.singleLineRow) {
-            // "Invisibility 1          13:47" - one line, name left, timer
-            // right-aligned to this row's own capsule, not the outer card.
+            // "Health Boost I          ∞" / "Invisibility I     1:32"
+            // name left, timer right-aligned (matches the screenshot).
             const std::string title = titleForEffect(effect, config);
-            const float lineY = animatedRowY + capsuleHeight * 0.5f + textSize * 0.35f;
+            const float lineY = config.showRowCapsule
+                ? (animatedRowY + capsuleHeight * 0.5f + textSize * 0.35f)
+                : (animatedRowY + rowStride * 0.5f + textSize * 0.35f);
             if (config.textShadow) {
                 addText(textX + shadowOffset, lineY + shadowOffset, widthMode, textSize, shadowColor, title);
-                addText(capsuleRightInnerX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, shadowColor, timer);
+                addText(timerRightX + shadowOffset, lineY + shadowOffset, -1.0f, timerSize, shadowColor, timer);
             }
             addText(textX, lineY, widthMode, textSize, effectColor, title);
-            addText(capsuleRightInnerX, lineY, -1.0f, timerSize, effectColor, timer);
+            addText(timerRightX, lineY, -1.0f, timerSize, effectColor, timer);
         } else if (config.showTitle) {
             const std::string title = titleForEffect(effect, config);
             const float titleY = animatedRowY + textSize;
