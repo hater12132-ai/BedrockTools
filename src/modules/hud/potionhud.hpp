@@ -58,6 +58,8 @@ private:
         std::uint32_t cardColor;
         float cardRadius;
         float cardPadding;
+        float cardWidth;   // 0 = auto (fit content)
+        float cardHeight;  // 0 = auto (fit content)
         bool showHeader;
         bool singleLineRow;
         bool showRowCapsule;
@@ -117,9 +119,11 @@ private:
     // existing layout options above still work when showCard/showHeader
     // are turned off.
     bool m_showCard = true;
-    std::string m_cardColor = "#E0121218";
+    std::string m_cardColor = "#FF0A0A0E"; // fully opaque near-black
     float m_cardRadius = 12.0f;
     float m_cardPadding = 12.0f;
+    float m_cardWidth = 0.0f;   // 0 = auto-fit content
+    float m_cardHeight = 0.0f;  // 0 = auto-fit content
     bool m_showHeader = true;
     bool m_singleLineRow = true;
 

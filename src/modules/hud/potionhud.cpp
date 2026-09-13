@@ -574,6 +574,37 @@ void PotionHudModule::onMenuRegistered() {
     slider("m_gridGap", "Gap Between Elements", "editor", "snapping", "0", "100", "1", " px");
     slider("m_snapThreshold", "Snap Distance", "editor", "snapping", "1", "100", "1", " px");
 
+    schema.category("card", "Card", "Panel background, size, and rounding");
+    section("card_panel", "Panel", "card");
+    toggle("m_showCard", "Show Card", "card", "card_panel");
+    toggle("m_showHeader", "Show Header", "card", "card_panel");
+    auto cardColor = node("m_cardColor", "Card Color", "card", ConfigControlTypeV2::Color);
+    cardColor.section = "card_panel";
+    cardColor.defaultValue = "#FF0A0A0E";
+    cardColor.visibleWhen = {{"m_showCard", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(cardColor));
+    section("card_size", "Size & Rounding", "card");
+    auto cardWidth = node("m_cardWidth", "Card Width", "card", ConfigControlTypeV2::SliderFloat);
+    cardWidth.section = "card_size";
+    cardWidth.minValue = "0";
+    cardWidth.maxValue = "400";
+    cardWidth.step = "1";
+    cardWidth.unit = " px";
+    cardWidth.description = "0 = auto-fit content";
+    cardWidth.visibleWhen = {{"m_showCard", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(cardWidth));
+    auto cardHeight = node("m_cardHeight", "Card Height", "card", ConfigControlTypeV2::SliderFloat);
+    cardHeight.section = "card_size";
+    cardHeight.minValue = "0";
+    cardHeight.maxValue = "600";
+    cardHeight.step = "1";
+    cardHeight.unit = " px";
+    cardHeight.description = "0 = auto-fit content";
+    cardHeight.visibleWhen = {{"m_showCard", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(cardHeight));
+    slider("m_cardRadius", "Corner Rounding", "card", "card_size", "0", "48", "0.5", " px");
+    slider("m_cardPadding", "Inner Padding", "card", "card_size", "0", "40", "0.5", " px");
+
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -610,9 +641,11 @@ PotionHudModule::ConfigSnapshot PotionHudModule::snapshotConfig() const {
             (m_snapToElements ? pl::modmenu::HudSnapElements : pl::modmenu::HudSnapNone) |
             (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone),
         m_showCard,
-        parseColor(m_cardColor, 0xCC15151Au),
+        parseColor(m_cardColor, 0xFF0A0A0Eu),
         m_cardRadius,
         m_cardPadding,
+        m_cardWidth,
+        m_cardHeight,
         m_showHeader,
         m_singleLineRow,
         m_showRowCapsule,
@@ -760,8 +793,14 @@ bool PotionHudModule::renderNative(void* context, void* client) {
     if (config.showCard && !effects.empty()) {
         const float cardX = config.hudPosX - padding;
         const float cardY = config.hudPosY - padding;
-        const float cardW = cardInnerWidth + padding * 2.0f;
-        const float cardH = headerHeight + contentHeight + padding * 2.0f;
+        const float autoW = cardInnerWidth + padding * 2.0f;
+        const float autoH = headerHeight + contentHeight + padding * 2.0f;
+        const float cardW = (config.cardWidth > 0.5f)
+            ? config.cardWidth * config.uiScale * surfaceScale
+            : autoW;
+        const float cardH = (config.cardHeight > 0.5f)
+            ? config.cardHeight * config.uiScale * surfaceScale
+            : autoH;
         RectangleArea cardArea{
             full.x0 + cardX / scaleX,
             full.x0 + (cardX + cardW) / scaleX,
@@ -848,8 +887,15 @@ void PotionHudModule::onFrame() {
 
     const float cardX = config.hudPosX - padding;
     const float cardY = config.hudPosY - padding;
-    const float cardWidth = cardInnerWidth + padding * 2.0f;
-    const float cardHeight = headerHeight + contentHeight + padding * 2.0f;
+    const float autoCardWidth = cardInnerWidth + padding * 2.0f;
+    const float autoCardHeight = headerHeight + contentHeight + padding * 2.0f;
+    // 0 = auto-fit content; otherwise fixed size from config (scaled).
+    const float cardWidth = (config.cardWidth > 0.5f)
+        ? config.cardWidth * config.uiScale * surfaceScale
+        : autoCardWidth;
+    const float cardHeight = (config.cardHeight > 0.5f)
+        ? config.cardHeight * config.uiScale * surfaceScale
+        : autoCardHeight;
 
     // Rows start below the header (if any); the card itself stays anchored
     // at the original hudPosX/hudPosY so existing HUD-editor snap points
@@ -924,9 +970,9 @@ void PotionHudModule::onFrame() {
     };
 
     if (config.showCard && hasEffects) {
-        // Solid card fill is drawn natively (under the effect icons) in
-        // renderNative(). Drawing another opaque fill here would cover the
-        // real coloured icons again. Only keep soft edge / outline on top.
+        // Opaque panel fill MUST be drawn here (mod-menu overlay). The native
+        // fillRectangle underlay is unreliable across builds; without this
+        // the card disappears and only text remains.
         if (config.blurAmount > 0.001f) {
             constexpr int layers = 3;
             for (int i = layers; i >= 1; --i) {
@@ -942,6 +988,11 @@ void PotionHudModule::onFrame() {
                     cardWidth + outlineThicknessPx * 2.0f, cardHeight + outlineThicknessPx * 2.0f,
                     cardRadiusPx + outlineThicknessPx, config.outlineColor);
         }
+
+        // Force fully opaque panel (ignore low alpha in config so the card
+        // never goes translucent by accident).
+        const std::uint32_t solidCard = 0xFF000000u | (config.cardColor & 0x00FFFFFFu);
+        addRect(cardX, cardY, cardWidth, cardHeight, cardRadiusPx, solidCard);
     }
 
     if (config.showHeader && hasEffects) {
@@ -1000,9 +1051,11 @@ void PotionHudModule::onFrame() {
         const float capsuleHeight = std::max(1.0f, rowStride - config.rowGap * config.uiScale * surfaceScale);
         const float capsuleY = animatedRowY + (rowStride - capsuleHeight) * 0.5f;
         const float capsuleRadiusPx = config.cardRadius * 0.7f * config.uiScale * surfaceScale;
+        // Right-align timers to the actual card edge (respects fixed width).
+        const float contentRight = config.hudPosX - padding + cardWidth - padding;
         const float timerRightX = config.showRowCapsule
             ? (capsuleX + capsuleWidth - padding * 0.5f)
-            : (config.hudPosX + cardInnerWidth);
+            : contentRight;
 
         if (config.showRowCapsule) {
             if (config.showOutline && outlineThicknessPx > 0.01f) {
@@ -1014,9 +1067,10 @@ void PotionHudModule::onFrame() {
                     scaleAlpha(config.rowCapsuleColor, rowAlpha));
         }
 
-        // Always draw icons via DrawCommands when the card is on so they sit
-        // on TOP of the panel (native pass would be covered by the card).
-        if (!effect.nativeIcon) {
+        // Draw icons on TOP of the solid card. Native textures drawn under the
+        // overlay are covered by the opaque panel, so always emit a
+        // DrawCommand icon whenever the card is enabled.
+        if (!effect.nativeIcon || config.showCard) {
             const std::uint8_t iconAlpha = static_cast<std::uint8_t>(
                 std::clamp(config.iconOpacity * rowAlpha, 0.0f, 1.0f) * 255.0f);
             pl::modmenu::DrawCommand image;
@@ -1118,8 +1172,10 @@ void PotionHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_snapToScreenCenter")) m_snapToScreenCenter = j["m_snapToScreenCenter"].get<bool>();
     if (j.contains("m_showCard")) m_showCard = j["m_showCard"].get<bool>();
     if (j.contains("m_cardColor")) m_cardColor = j["m_cardColor"].get<std::string>();
-    if (j.contains("m_cardRadius")) m_cardRadius = std::clamp(j["m_cardRadius"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_cardRadius")) m_cardRadius = std::clamp(j["m_cardRadius"].get<float>(), 0.0f, 48.0f);
     if (j.contains("m_cardPadding")) m_cardPadding = std::clamp(j["m_cardPadding"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_cardWidth")) m_cardWidth = std::clamp(j["m_cardWidth"].get<float>(), 0.0f, 400.0f);
+    if (j.contains("m_cardHeight")) m_cardHeight = std::clamp(j["m_cardHeight"].get<float>(), 0.0f, 600.0f);
     if (j.contains("m_showHeader")) m_showHeader = j["m_showHeader"].get<bool>();
     if (j.contains("m_singleLineRow")) m_singleLineRow = j["m_singleLineRow"].get<bool>();
     if (j.contains("m_showRowCapsule")) m_showRowCapsule = j["m_showRowCapsule"].get<bool>();
@@ -1165,6 +1221,8 @@ void PotionHudModule::saveConfig(nlohmann::json& j) {
     j["m_cardColor"] = m_cardColor;
     j["m_cardRadius"] = m_cardRadius;
     j["m_cardPadding"] = m_cardPadding;
+    j["m_cardWidth"] = m_cardWidth;
+    j["m_cardHeight"] = m_cardHeight;
     j["m_showHeader"] = m_showHeader;
     j["m_singleLineRow"] = m_singleLineRow;
     j["m_showRowCapsule"] = m_showRowCapsule;
