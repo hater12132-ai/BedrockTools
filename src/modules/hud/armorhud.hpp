@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class ArmorHudModule : public Module {
 public:
@@ -52,6 +53,22 @@ private:
         float gridGap;
         float snapThreshold;
         std::uint32_t snapFlags;
+        // Capsule bar style (screenshot look)
+        bool barStyle;
+        float barPosX;
+        float barPosY;
+        float barIconSize;
+        float barPadding;
+        float barGap;
+        float barRadius;
+        std::uint32_t barColor;
+        bool showGlow;
+        std::uint32_t glowColor;
+        float glowAmount;
+        bool space;          // white stars drifting inside the card
+        int starCount;
+        float starSpeed;
+        bool onlyEquipped;   // only show slots that currently have an item
     };
 
     ConfigSnapshot snapshotConfig() const;
@@ -112,4 +129,32 @@ private:
     bool m_snapToGrid = true;
     bool m_snapToElements = true;
     bool m_snapToScreenCenter = true;
+
+    // Horizontal black capsule bar (screenshot style)
+    bool m_barStyle = true;
+    float hudBarPosX = 200.0f;
+    float hudBarPosY = 40.0f;
+    float m_barIconSize = 28.0f;
+    float m_barPadding = 10.0f;
+    float m_barGap = 6.0f;
+    float m_barRadius = 14.0f;
+    std::string m_barColor = "#FF000000"; // full black
+    bool m_showGlow = true;
+    std::string m_glowColor = "#6640E0FF"; // soft cyan
+    float m_glowAmount = 0.55f;
+    bool m_space = true; // little white stars flying in the card
+    int m_starCount = 18;
+    float m_starSpeed = 1.0f;
+    bool m_onlyEquipped = true;
+
+    struct Star {
+        float x = 0.0f; // 0..1 inside card
+        float y = 0.0f;
+        float vx = 0.0f;
+        float vy = 0.0f;
+        float size = 1.0f;
+        float phase = 0.0f;
+    };
+    std::vector<Star> m_stars;
+    bool m_starsSeeded = false;
 };

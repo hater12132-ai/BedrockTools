@@ -247,6 +247,23 @@ void flushImages(void* context) {
     reinterpret_cast<Fn>(vtable[bedrocktools::sdk::offsets::VTable::MinecraftUIRenderContextFlushImages])(context, color, 1.0f, material);
 }
 
+void fillRectangle(void* context, const RectangleArea& area, const Color& color) {
+    void** vtable = getVtable(context);
+    if (!vtable || !vtable[bedrocktools::sdk::offsets::VTable::MinecraftUIRenderContextFillRectangle]) return;
+    using Fn = void (*)(void*, const RectangleArea&, const Color&);
+    reinterpret_cast<Fn>(vtable[bedrocktools::sdk::offsets::VTable::MinecraftUIRenderContextFillRectangle])(
+        context, area, color);
+}
+
+Color colorFromArgb(std::uint32_t argb) {
+    return Color{
+        static_cast<float>((argb >> 16) & 0xFFu) / 255.0f,
+        static_cast<float>((argb >> 8) & 0xFFu) / 255.0f,
+        static_cast<float>(argb & 0xFFu) / 255.0f,
+        static_cast<float>((argb >> 24) & 0xFFu) / 255.0f,
+    };
+}
+
 void setHudOpacity(void* context, float opacity) {
     if (!context) return;
     void* screenContext = *reinterpret_cast<void**>(reinterpret_cast<std::byte*>(context) + bedrocktools::sdk::offsets::ShulkerPreview::MinecraftUIRenderContextScreenContext);
@@ -517,6 +534,47 @@ void ArmorHudModule::onMenuRegistered() {
     slider("m_gridGap", "Gap Between Items", "editor", "snapping", "0", "100", "m_snapToElements");
     slider("m_snapThreshold", "Snap Distance", "editor", "snapping", "1", "100");
 
+    schema.category("bar", "Capsule Bar", "Black horizontal armor bar like the screenshot");
+    section("bar_style", "Style", "bar");
+    auto barStyle = node("m_barStyle", "Capsule Bar Style", "bar", ConfigControlTypeV2::Toggle);
+    barStyle.section = "bar_style";
+    barStyle.defaultValue = "true";
+    schema.node(std::move(barStyle));
+    auto onlyEquipped = node("m_onlyEquipped", "Only Equipped Items", "bar", ConfigControlTypeV2::Toggle);
+    onlyEquipped.section = "bar_style";
+    onlyEquipped.defaultValue = "true";
+    onlyEquipped.visibleWhen = {{"m_barStyle", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(onlyEquipped));
+    auto barColor = node("m_barColor", "Bar Color", "bar", ConfigControlTypeV2::Color);
+    barColor.section = "bar_style";
+    barColor.defaultValue = "#FF000000";
+    barColor.visibleWhen = {{"m_barStyle", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(barColor));
+    slider("m_barIconSize", "Icon Size", "bar", "bar_style", "12", "64", "m_barStyle");
+    slider("m_barPadding", "Inner Padding", "bar", "bar_style", "0", "40", "m_barStyle");
+    slider("m_barGap", "Gap Between Icons", "bar", "bar_style", "0", "24", "m_barStyle");
+    slider("m_barRadius", "Corner Rounding", "bar", "bar_style", "0", "40", "m_barStyle");
+    section("bar_glow", "Glow", "bar");
+    auto showGlow = node("m_showGlow", "Soft Glow", "bar", ConfigControlTypeV2::Toggle);
+    showGlow.section = "bar_glow";
+    showGlow.defaultValue = "true";
+    showGlow.visibleWhen = {{"m_barStyle", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(showGlow));
+    auto glowColor = node("m_glowColor", "Glow Color", "bar", ConfigControlTypeV2::Color);
+    glowColor.section = "bar_glow";
+    glowColor.defaultValue = "#6640E0FF";
+    glowColor.visibleWhen = {{"m_showGlow", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(glowColor));
+    slider("m_glowAmount", "Glow Strength", "bar", "bar_glow", "0", "1", "m_showGlow");
+    section("bar_space", "Space", "bar");
+    auto space = node("m_space", "Space (Stars)", "bar", ConfigControlTypeV2::Toggle);
+    space.section = "bar_space";
+    space.defaultValue = "true";
+    space.visibleWhen = {{"m_barStyle", ConfigConditionOpV2::Truthy, {}}};
+    schema.node(std::move(space));
+    slider("m_starCount", "Star Count", "bar", "bar_space", "4", "48", "m_space");
+    slider("m_starSpeed", "Star Speed", "bar", "bar_space", "0", "3", "m_space");
+
     pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
@@ -551,7 +609,22 @@ ArmorHudModule::ConfigSnapshot ArmorHudModule::snapshotConfig() const {
         m_snapThreshold,
         (m_snapToGrid ? pl::modmenu::HudSnapGrid : pl::modmenu::HudSnapNone) |
             (m_snapToElements ? pl::modmenu::HudSnapElements : pl::modmenu::HudSnapNone) |
-            (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone)
+            (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone),
+        m_barStyle,
+        hudBarPosX,
+        hudBarPosY,
+        m_barIconSize,
+        m_barPadding,
+        m_barGap,
+        m_barRadius,
+        parseColor(m_barColor),
+        m_showGlow,
+        parseColor(m_glowColor),
+        m_glowAmount,
+        m_space,
+        m_starCount,
+        m_starSpeed,
+        m_onlyEquipped
     };
 }
 
@@ -561,6 +634,50 @@ void ArmorHudModule::clearRuntime() {
         slot.damage.store(0, std::memory_order_release);
         slot.maxDamage.store(0, std::memory_order_release);
     }
+}
+
+// When capsule-bar style is on, rewrite slot x/y/size into a horizontal row
+// inside the black card. Returns number of visible icons.
+static std::size_t applyBarLayout(
+    bool barStyle,
+    bool onlyEquipped,
+    float barPosX, float barPosY, float barIconSize, float barPadding, float barGap,
+    std::array<bool, 6> hasItem,
+    std::array<bool, 6>& enabled,
+    std::array<float, 6>& outX,
+    std::array<float, 6>& outY,
+    std::array<float, 6>& outSize,
+    float& outCardX, float& outCardY, float& outCardW, float& outCardH) {
+    outCardX = outCardY = outCardW = outCardH = 0.0f;
+    if (!barStyle) return 0;
+
+    std::vector<std::size_t> visible;
+    visible.reserve(6);
+    for (std::size_t i = 0; i < 6; ++i) {
+        if (!enabled[i]) continue;
+        if (onlyEquipped && !hasItem[i]) continue;
+        visible.push_back(i);
+    }
+    if (visible.empty()) return 0;
+
+    const float icon = std::max(8.0f, barIconSize);
+    const float pad = barPadding;
+    const float gap = barGap;
+    const float contentW = static_cast<float>(visible.size()) * icon
+        + static_cast<float>(visible.size() - 1) * gap;
+    outCardX = barPosX;
+    outCardY = barPosY;
+    outCardW = contentW + pad * 2.0f;
+    outCardH = icon + pad * 2.0f;
+
+    for (std::size_t i = 0; i < 6; ++i) outSize[i] = 0.0f;
+    for (std::size_t n = 0; n < visible.size(); ++n) {
+        const std::size_t i = visible[n];
+        outSize[i] = icon;
+        outX[i] = outCardX + pad + static_cast<float>(n) * (icon + gap);
+        outY[i] = outCardY + pad;
+    }
+    return visible.size();
 }
 
 void ArmorHudModule::submitEditorElements(const ConfigSnapshot& config) {
@@ -601,8 +718,27 @@ void ArmorHudModule::renderNative(void* context, void* client) {
         return;
     }
 
-    const ConfigSnapshot config = snapshotConfig();
+    ConfigSnapshot config = snapshotConfig();
     const auto stacks = getHudStacks(localPlayer);
+    float cardX = 0, cardY = 0, cardW = 0, cardH = 0;
+    if (config.barStyle) {
+        std::array<bool, 6> hasItem{};
+        std::array<bool, 6> enabled{};
+        std::array<float, 6> bx{}, by{}, bs{};
+        for (std::size_t i = 0; i < 6; ++i) {
+            hasItem[i] = getStackItem(stacks[i]) != nullptr;
+            enabled[i] = config.slots[i].enabled;
+        }
+        applyBarLayout(config.barStyle, config.onlyEquipped, config.barPosX, config.barPosY,
+                       config.barIconSize, config.barPadding, config.barGap,
+                       hasItem, enabled, bx, by, bs, cardX, cardY, cardW, cardH);
+        for (std::size_t i = 0; i < 6; ++i) {
+            config.slots[i].x = bx[i];
+            config.slots[i].y = by[i];
+            config.slots[i].size = bs[i];
+        }
+        config.hotbarBackground = false;
+    }
     const pl::modmenu::HudSurfaceSize surface = pl::modmenu::getHudSurfaceSize();
     const RectangleArea full = getFullClippingRectangle(context);
     const bool canRender = surface.width > 0.0f && surface.height > 0.0f && validRectangle(full);
@@ -621,6 +757,23 @@ void ArmorHudModule::renderNative(void* context, void* client) {
     const float uiWidth = full.x1 - full.x0;
     const float uiHeight = full.y1 - full.y0;
     bool renderedAny = false;
+
+    // Draw the solid black capsule under the items (native pass) so icons
+    // sit on top of the panel. Glow/stars are drawn later in onFrame.
+    if (config.barStyle && canRender && cardW > 1.0f && cardH > 1.0f) {
+        const float scaleX = surface.width > 0.0f ? uiWidth / surface.width : 1.0f;
+        const float scaleY = surface.height > 0.0f ? uiHeight / surface.height : 1.0f;
+        RectangleArea cardArea{
+            full.x0 + cardX * scaleX,
+            full.x0 + (cardX + cardW) * scaleX,
+            full.y0 + cardY * scaleY,
+            full.y0 + (cardY + cardH) * scaleY,
+        };
+        if (validRectangle(cardArea)) {
+            const std::uint32_t solid = 0xFF000000u | (config.barColor & 0x00FFFFFFu);
+            fillRectangle(context, cardArea, colorFromArgb(solid));
+        }
+    }
 
     if (config.hotbarBackground && canRender) {
         TexturePtr hotbarTexture = getTexture(context, ResourceLocation(HotbarTexturePath));
@@ -735,15 +888,103 @@ void ArmorHudModule::renderNative(void* context, void* client) {
 void ArmorHudModule::onFrame() {
     if (!enabled) return;
 
-    const ConfigSnapshot config = snapshotConfig();
+    ConfigSnapshot config = snapshotConfig();
+    float cardX = 0, cardY = 0, cardW = 0, cardH = 0;
+    std::size_t barIcons = 0;
+    if (config.barStyle) {
+        std::array<bool, 6> hasItem{};
+        std::array<bool, 6> enabled{};
+        std::array<float, 6> bx{}, by{}, bs{};
+        for (std::size_t i = 0; i < 6; ++i) {
+            hasItem[i] = m_runtime[i].hasItem.load(std::memory_order_acquire);
+            enabled[i] = config.slots[i].enabled;
+        }
+        barIcons = applyBarLayout(config.barStyle, config.onlyEquipped, config.barPosX, config.barPosY,
+                                  config.barIconSize, config.barPadding, config.barGap,
+                                  hasItem, enabled, bx, by, bs, cardX, cardY, cardW, cardH);
+        for (std::size_t i = 0; i < 6; ++i) {
+            config.slots[i].x = bx[i];
+            config.slots[i].y = by[i];
+            config.slots[i].size = bs[i];
+        }
+    }
     submitEditorElements(config);
 
     std::vector<pl::modmenu::DrawCommand> commands;
-    commands.reserve(SlotCount);
+    commands.reserve(SlotCount + 64);
+
+    auto addRect = [&](float x, float y, float w, float h, float radius, std::uint32_t color) {
+        pl::modmenu::DrawCommand rect;
+        rect.type = pl::modmenu::DrawCommandType::RectFilled;
+        rect.x = x;
+        rect.y = y;
+        rect.w = w;
+        rect.h = h;
+        rect.x3 = radius;
+        rect.color = color;
+        commands.push_back(rect);
+    };
+
+    auto scaleAlpha = [](std::uint32_t color, float factor) -> std::uint32_t {
+        const std::uint32_t a = (color >> 24) & 0xFFu;
+        const std::uint32_t scaled = static_cast<std::uint32_t>(std::clamp(static_cast<float>(a) * factor, 0.0f, 255.0f));
+        return (scaled << 24) | (color & 0x00FFFFFFu);
+    };
+
+    // Black capsule + glow + Space stars
+    if (config.barStyle && barIcons > 0 && cardW > 1.0f && cardH > 1.0f) {
+        const float radius = config.barRadius;
+        if (config.showGlow && config.glowAmount > 0.01f) {
+            constexpr int layers = 3;
+            for (int i = layers; i >= 1; --i) {
+                const float spread = (6.0f + config.barPadding * 0.4f) * config.glowAmount * (static_cast<float>(i) / layers);
+                const float layerAlpha = (config.glowAmount * 0.35f) / static_cast<float>(i);
+                addRect(cardX - spread, cardY - spread, cardW + spread * 2.0f, cardH + spread * 2.0f,
+                        radius + spread, scaleAlpha(config.glowColor, layerAlpha));
+            }
+        }
+        // Solid fill is drawn natively under the items. Overlay only does
+        // rounded glow/stars so icons stay visible on the black bar.
+
+        if (config.space && config.starCount > 0) {
+            if (!m_starsSeeded || static_cast<int>(m_stars.size()) != config.starCount) {
+                m_stars.clear();
+                m_stars.resize(static_cast<std::size_t>(std::clamp(config.starCount, 1, 64)));
+                for (std::size_t i = 0; i < m_stars.size(); ++i) {
+                    auto& s = m_stars[i];
+                    s.x = static_cast<float>((i * 37 + 11) % 100) / 100.0f;
+                    s.y = static_cast<float>((i * 53 + 7) % 100) / 100.0f;
+                    s.vx = 0.0015f + static_cast<float>((i * 13) % 10) * 0.0004f;
+                    s.vy = 0.0010f + static_cast<float>((i * 17) % 10) * 0.0003f;
+                    if (i & 1) s.vx = -s.vx;
+                    if (i & 2) s.vy = -s.vy;
+                    s.size = 1.0f + static_cast<float>(i % 3) * 0.5f;
+                    s.phase = static_cast<float>(i) * 0.7f;
+                }
+                m_starsSeeded = true;
+            }
+            const float speed = std::max(0.05f, config.starSpeed);
+            for (auto& s : m_stars) {
+                s.x += s.vx * speed;
+                s.y += s.vy * speed;
+                s.phase += 0.04f * speed;
+                if (s.x < 0.02f) { s.x = 0.02f; s.vx = std::abs(s.vx); }
+                if (s.x > 0.98f) { s.x = 0.98f; s.vx = -std::abs(s.vx); }
+                if (s.y < 0.02f) { s.y = 0.02f; s.vy = std::abs(s.vy); }
+                if (s.y > 0.98f) { s.y = 0.98f; s.vy = -std::abs(s.vy); }
+                const float twinkle = 0.45f + 0.55f * (0.5f + 0.5f * std::sin(s.phase));
+                const float sx = cardX + s.x * cardW;
+                const float sy = cardY + s.y * cardH;
+                const float sz = s.size;
+                const std::uint32_t starColor = scaleAlpha(0xFFFFFFFFu, twinkle);
+                addRect(sx, sy, sz, sz, 0.0f, starColor);
+            }
+        }
+    }
 
     for (std::size_t i = 0; i < SlotCount; ++i) {
         const SlotConfig& slot = config.slots[i];
-        if (!slot.enabled) continue;
+        if (!slot.enabled || slot.size <= 0.0f) continue;
 
         const bool hasItem = m_runtime[i].hasItem.load(std::memory_order_acquire);
         const int damage = m_runtime[i].damage.load(std::memory_order_acquire);
@@ -771,10 +1012,11 @@ void ArmorHudModule::onFrame() {
 
         pl::modmenu::DrawCommand durability;
         durability.type = pl::modmenu::DrawCommandType::Text;
-        const float backgroundLeft = config.hotbarBackground ? slot.x - slot.size * HotbarItemInsetX / VanillaItemSize : slot.x;
-        const float backgroundTop = config.hotbarBackground ? slot.y - slot.size * HotbarItemInsetY / VanillaItemSize : slot.y;
-        const float backgroundWidth = config.hotbarBackground ? slot.size * HotbarCellWidth / VanillaItemSize : slot.size;
-        const float backgroundHeight = config.hotbarBackground ? slot.size * HotbarCellHeight / VanillaItemSize : slot.size;
+        const bool useHotbar = config.hotbarBackground && !config.barStyle;
+        const float backgroundLeft = useHotbar ? slot.x - slot.size * HotbarItemInsetX / VanillaItemSize : slot.x;
+        const float backgroundTop = useHotbar ? slot.y - slot.size * HotbarItemInsetY / VanillaItemSize : slot.y;
+        const float backgroundWidth = useHotbar ? slot.size * HotbarCellWidth / VanillaItemSize : slot.size;
+        const float backgroundHeight = useHotbar ? slot.size * HotbarCellHeight / VanillaItemSize : slot.size;
         const float verticalCenterBaseline = backgroundTop + backgroundHeight * 0.5f + config.durabilityTextSize * 0.35f;
         if (config.durabilityTextPosition == 1) {
             durability.x = backgroundLeft - config.durabilityTextGap;
@@ -861,6 +1103,22 @@ void ArmorHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_snapToGrid")) m_snapToGrid = j["m_snapToGrid"].get<bool>();
     if (j.contains("m_snapToElements")) m_snapToElements = j["m_snapToElements"].get<bool>();
     if (j.contains("m_snapToScreenCenter")) m_snapToScreenCenter = j["m_snapToScreenCenter"].get<bool>();
+
+    if (j.contains("m_barStyle")) m_barStyle = j["m_barStyle"].get<bool>();
+    if (j.contains("hudBarPosX")) hudBarPosX = std::clamp(j["hudBarPosX"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("hudBarPosY")) hudBarPosY = std::clamp(j["hudBarPosY"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("m_barIconSize")) m_barIconSize = std::clamp(j["m_barIconSize"].get<float>(), 8.0f, 100.0f);
+    if (j.contains("m_barPadding")) m_barPadding = std::clamp(j["m_barPadding"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_barGap")) m_barGap = std::clamp(j["m_barGap"].get<float>(), 0.0f, 24.0f);
+    if (j.contains("m_barRadius")) m_barRadius = std::clamp(j["m_barRadius"].get<float>(), 0.0f, 40.0f);
+    if (j.contains("m_barColor")) m_barColor = j["m_barColor"].get<std::string>();
+    if (j.contains("m_showGlow")) m_showGlow = j["m_showGlow"].get<bool>();
+    if (j.contains("m_glowColor")) m_glowColor = j["m_glowColor"].get<std::string>();
+    if (j.contains("m_glowAmount")) m_glowAmount = std::clamp(j["m_glowAmount"].get<float>(), 0.0f, 1.0f);
+    if (j.contains("m_space")) m_space = j["m_space"].get<bool>();
+    if (j.contains("m_starCount")) m_starCount = std::clamp(j["m_starCount"].get<int>(), 1, 64);
+    if (j.contains("m_starSpeed")) m_starSpeed = std::clamp(j["m_starSpeed"].get<float>(), 0.05f, 5.0f);
+    if (j.contains("m_onlyEquipped")) m_onlyEquipped = j["m_onlyEquipped"].get<bool>();
 }
 
 void ArmorHudModule::saveConfig(nlohmann::json& j) {
@@ -918,4 +1176,20 @@ void ArmorHudModule::saveConfig(nlohmann::json& j) {
     j["m_snapToGrid"] = m_snapToGrid;
     j["m_snapToElements"] = m_snapToElements;
     j["m_snapToScreenCenter"] = m_snapToScreenCenter;
+
+    j["m_barStyle"] = m_barStyle;
+    j["hudBarPosX"] = hudBarPosX;
+    j["hudBarPosY"] = hudBarPosY;
+    j["m_barIconSize"] = m_barIconSize;
+    j["m_barPadding"] = m_barPadding;
+    j["m_barGap"] = m_barGap;
+    j["m_barRadius"] = m_barRadius;
+    j["m_barColor"] = m_barColor;
+    j["m_showGlow"] = m_showGlow;
+    j["m_glowColor"] = m_glowColor;
+    j["m_glowAmount"] = m_glowAmount;
+    j["m_space"] = m_space;
+    j["m_starCount"] = m_starCount;
+    j["m_starSpeed"] = m_starSpeed;
+    j["m_onlyEquipped"] = m_onlyEquipped;
 }
