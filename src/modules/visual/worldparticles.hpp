@@ -2,24 +2,24 @@
 
 #include "../Module.hpp"
 #include <bedrocktools/sdk/Types.hpp>
+#include <cstdint>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <mutex>
-#include <cstdint>
 
 class WorldParticlesModule : public Module {
 public:
     enum class Mode : int {
-        Snow = 0,       // normal falling snow
-        Hearts = 1,     // heart particles
-        Stars = 2,      // star twinkles
-        Orbs = 3,       // floating orbs
-        Storm = 4,      // heavy storm flakes
-        Snowflake = 5,  // larger flakes
-        Dollar = 6,     // green money-style
-        Pumpkin = 7,    // orange halloween
-        Multi = 8,      // mix of styles
-        Glowfly = 9     // fireflies
+        Snow = 0,
+        Hearts = 1,
+        Stars = 2,
+        Orbs = 3,
+        Storm = 4,
+        Snowflake = 5,
+        Dollar = 6,
+        Pumpkin = 7,
+        Multi = 8,
+        Glowfly = 9
     };
 
     WorldParticlesModule();
@@ -28,28 +28,31 @@ public:
     void onInit() override;
     void onEnable() override;
     void onDisable() override;
-    void onMenuRegistered() override;
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
     Mode mode = Mode::Snow;
-    int density = 80;          // target live particles
-    float radius = 18.0f;      // spawn radius around player
-    float fallSpeed = 1.0f;    // vertical speed multiplier
+    int density = 80;
+    float radius = 18.0f;
+    float fallSpeed = 1.0f;
     float particleSize = 0.12f;
     float opacity = 0.85f;
     std::string colorHex = "#FFFFFFFF";
-    bool rainbow = false;
+    bool forceTint = false;
     float wind = 0.35f;
 
     struct Particle {
-        float x = 0, y = 0, z = 0;
-        float vx = 0, vy = 0, vz = 0;
-        float life = 0;
-        float maxLife = 1;
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        float vx = 0.0f;
+        float vy = 0.0f;
+        float vz = 0.0f;
+        float life = 0.0f;
+        float maxLife = 1.0f;
         float size = 0.1f;
-        float phase = 0;
-        int style = 0; // sub-style for multi mode
+        float phase = 0.0f;
+        int style = 0;
         std::uint32_t color = 0xFFFFFFFFu;
     };
 

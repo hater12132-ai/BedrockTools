@@ -1,21 +1,20 @@
 #include "worldparticles.hpp"
 
 #include "core/memory/Hooks.hpp"
-#include "modules/ModuleRegistry.hpp"
 
 #include <bedrocktools/events/EventBus.hpp>
 #include <bedrocktools/memory/Signatures.hpp>
 #include <bedrocktools/sdk/Memory.hpp>
 #include <bedrocktools/sdk/Offsets.hpp>
 #include <bedrocktools/sdk/world/Actor.hpp>
-#include <pl/ModMenuConfig.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
-#include <random>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -30,33 +29,57 @@ struct HashedString {
     mutable const HashedString* mLastMatch;
 
     HashedString() : mStrHash(0), mStr(), mLastMatch(nullptr) {}
+
     explicit HashedString(const char* str) : mLastMatch(nullptr) {
         mStr = str ? str : "";
+        mStrHash = computeHash(mStr);
+    }
+
+private:
+    static uint64_t computeHash(const std::string& str) {
+        if (str.empty()) return 0;
         constexpr uint64_t kOffset = 0xCBF29CE484222325ULL;
         constexpr uint64_t kPrime = 0x100000001B3ULL;
         uint64_t hash = kOffset;
-        for (unsigned char ch : mStr)
-            hash = static_cast<uint64_t>(ch) ^ (kPrime * hash);
-        mStrHash = hash;
+        for (size_t i = 0; i < str.size(); ++i) {
+            hash = static_cast<uint64_t>(static_cast<unsigned char>(str[i])) ^ (kPrime * hash);
+        }
+        return hash;
     }
 };
 
 struct MaterialPtr {
     void* sharedPtrData[2]{nullptr, nullptr};
+
     MaterialPtr() = default;
     MaterialPtr(const MaterialPtr&) = delete;
     MaterialPtr& operator=(const MaterialPtr&) = delete;
-    MaterialPtr(MaterialPtr&& o) noexcept {
-        sharedPtrData[0] = o.sharedPtrData[0];
-        sharedPtrData[1] = o.sharedPtrData[1];
-        o.sharedPtrData[0] = o.sharedPtrData[1] = nullptr;
+
+    MaterialPtr(MaterialPtr&& other) noexcept
+        : sharedPtrData{other.sharedPtrData[0], other.sharedPtrData[1]} {
+        other.sharedPtrData[0] = nullptr;
+        other.sharedPtrData[1] = nullptr;
     }
+
+    MaterialPtr& operator=(MaterialPtr&& other) noexcept {
+        if (this != &other) {
+            sharedPtrData[0] = other.sharedPtrData[0];
+            sharedPtrData[1] = other.sharedPtrData[1];
+            other.sharedPtrData[0] = nullptr;
+            other.sharedPtrData[1] = nullptr;
+        }
+        return *this;
+    }
+
     ~MaterialPtr() {}
-    explicit operator bool() const { return sharedPtrData[0] != nullptr; }
+
+    explicit operator bool() const {
+        return sharedPtrData[0] != nullptr;
+    }
 };
 
 static WorldParticlesModule* g_mod = nullptr;
-static std::mt19937 s_rng{std::random_device{}()};
+static uint32_t s_rngState = 0xA341316Cu;
 
 static Tessellator_begin_t s_tessBegin = nullptr;
 static Tessellator_color_t s_tessColor = nullptr;
@@ -67,8 +90,9 @@ static uintptr_t s_renderMaterialGroup = 0;
 static void (*s_renderLevelOrig)(void* self, void* screenContext, void* a3) = nullptr;
 
 static float randf(float lo, float hi) {
-    std::uniform_real_distribution<float> dist(lo, hi);
-    return dist(s_rng);
+    s_rngState = s_rngState * 1664525u + 1013904223u;
+    const float t = static_cast<float>((s_rngState >> 8) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
+    return lo + (hi - lo) * t;
 }
 
 static std::uint32_t parseColor(const std::string& value, std::uint32_t fallback = 0xFFFFFFFFu) {
@@ -77,7 +101,8 @@ static std::uint32_t parseColor(const std::string& value, std::uint32_t fallback
     try {
         if (hex.size() == 6) return 0xFF000000u | static_cast<std::uint32_t>(std::stoul(hex, nullptr, 16));
         if (hex.size() == 8) return static_cast<std::uint32_t>(std::stoul(hex, nullptr, 16));
-    } catch (...) {}
+    } catch (...) {
+    }
     return fallback;
 }
 
@@ -85,9 +110,11 @@ static uintptr_t resolveADRP(uint32_t* insns, size_t count, uint32_t targetReg) 
     for (size_t i = 0; i < count; i++) {
         uint32_t insn = insns[i];
         if ((insn & 0x1F) != targetReg) continue;
+
         if ((insn & 0x9F000000) == 0x90000000) {
             uintptr_t page = ((uintptr_t)&insns[i] & ~0xFFFULL)
                 + ((int64_t)((uint64_t)((insn >> 3) & 0x1FFFFC | (insn >> 29) & 3) << 43) >> 31);
+
             for (size_t j = i + 1; j < count; j++) {
                 uint32_t add = insns[j];
                 if ((add & 0xFF000000) == 0x91000000 &&
@@ -99,6 +126,10 @@ static uintptr_t resolveADRP(uint32_t* insns, size_t count, uint32_t targetReg) 
                 }
                 if ((add & 0x1F) == targetReg) break;
             }
+        }
+        if ((insn & 0x9F000000) == 0x10000000) {
+            int64_t imm = (int64_t)((uint64_t)((insn >> 3) & 0x1FFFFC | (insn >> 29)) << 43) >> 43;
+            return (uintptr_t)&insns[i] + imm;
         }
     }
     return 0;
@@ -116,28 +147,21 @@ static MaterialPtr getMaterial(const char* name) {
 static void ensureMaterials() {
     if (s_matSelection) return;
     if (!s_renderMaterialGroup) return;
-    s_matSelection = getMaterial("selection_box");
+    if (!s_matSelection) s_matSelection = getMaterial("selection_box");
 }
 
 static std::uint32_t styleColor(WorldParticlesModule::Mode mode, int style, float phase) {
     switch (mode) {
-        case WorldParticlesModule::Mode::Hearts:
-            return 0xFFFF5A8Au;
-        case WorldParticlesModule::Mode::Stars:
-            return 0xFFFFF2AAu;
-        case WorldParticlesModule::Mode::Orbs:
-            return 0xFF7AD7FFu;
-        case WorldParticlesModule::Mode::Storm:
-            return 0xFFB0C4DEu;
-        case WorldParticlesModule::Mode::Snowflake:
-            return 0xFFE8F6FFu;
-        case WorldParticlesModule::Mode::Dollar:
-            return 0xFF40E070u;
-        case WorldParticlesModule::Mode::Pumpkin:
-            return 0xFFFF8C20u;
+        case WorldParticlesModule::Mode::Hearts: return 0xFFFF5A8Au;
+        case WorldParticlesModule::Mode::Stars: return 0xFFFFF2AAu;
+        case WorldParticlesModule::Mode::Orbs: return 0xFF7AD7FFu;
+        case WorldParticlesModule::Mode::Storm: return 0xFFB0C4DEu;
+        case WorldParticlesModule::Mode::Snowflake: return 0xFFE8F6FFu;
+        case WorldParticlesModule::Mode::Dollar: return 0xFF40E070u;
+        case WorldParticlesModule::Mode::Pumpkin: return 0xFFFF8C20u;
         case WorldParticlesModule::Mode::Glowfly: {
             const float t = 0.5f + 0.5f * std::sin(phase);
-            const std::uint8_t a = static_cast<std::uint8_t>(120 + 135 * t);
+            const std::uint8_t a = static_cast<std::uint8_t>(120.0f + 135.0f * t);
             return (static_cast<std::uint32_t>(a) << 24) | 0x00FFE060u;
         }
         case WorldParticlesModule::Mode::Multi: {
@@ -205,8 +229,7 @@ static void spawnParticle(WorldParticlesModule* mod, float px, float py, float p
     p.phase = randf(0.0f, 6.28f);
     p.style = static_cast<int>(randf(0.0f, 6.99f));
     p.color = styleColor(mod->mode, p.style, p.phase);
-    // Force Custom Tint overrides the style preset colors
-    if (mod->rainbow) {
+    if (mod->forceTint) {
         p.color = parseColor(mod->colorHex, p.color);
     }
     mod->particles.push_back(p);
@@ -216,20 +239,19 @@ static void tickParticles(void* player) {
     if (!g_mod || !g_mod->enabled || !player) return;
 
     auto* actor = reinterpret_cast<bedrocktools::sdk::Actor*>(player);
-    const auto pos = actor->position();
+    const bedrocktools::sdk::Vec3 pos = actor->position();
 
-    std::lock_guard lock(g_mod->particlesMutex);
+    std::lock_guard<std::mutex> lock(g_mod->particlesMutex);
     auto& list = g_mod->particles;
 
-    // Integrate existing particles
-    for (auto& p : list) {
+    for (size_t i = 0; i < list.size(); ++i) {
+        auto& p = list[i];
         p.x += p.vx;
         p.y += p.vy;
         p.z += p.vz;
         p.phase += 0.08f;
         p.life -= 0.05f;
 
-        // Soft sway for glowflies / orbs
         if (g_mod->mode == WorldParticlesModule::Mode::Glowfly ||
             g_mod->mode == WorldParticlesModule::Mode::Orbs) {
             p.vx += std::sin(p.phase) * 0.002f;
@@ -239,8 +261,14 @@ static void tickParticles(void* player) {
         }
     }
 
-    list.erase(std::remove_if(list.begin(), list.end(),
-        [](const WorldParticlesModule::Particle& p) { return p.life <= 0.0f; }), list.end());
+    size_t write = 0;
+    for (size_t i = 0; i < list.size(); ++i) {
+        if (list[i].life > 0.0f) {
+            if (write != i) list[write] = list[i];
+            ++write;
+        }
+    }
+    list.resize(write);
 
     const int target = std::clamp(g_mod->density, 4, 400);
     int spawnBudget = std::max(1, target / 12);
@@ -250,7 +278,9 @@ static void tickParticles(void* player) {
 }
 
 static void renderLevelHook(void* self, void* screenContext, void* a3) {
-    if (s_renderLevelOrig) s_renderLevelOrig(self, screenContext, a3);
+    if (s_renderLevelOrig) {
+        s_renderLevelOrig(self, screenContext, a3);
+    }
 
     if (!g_mod || !g_mod->enabled) return;
     if (!s_tessBegin || !s_tessColor || !s_tessVertex || !s_renderMesh) return;
@@ -258,7 +288,7 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
 
     std::vector<WorldParticlesModule::Particle> snapshot;
     {
-        std::lock_guard lock(g_mod->particlesMutex);
+        std::lock_guard<std::mutex> lock(g_mod->particlesMutex);
         snapshot = g_mod->particles;
     }
     if (snapshot.empty()) return;
@@ -286,32 +316,33 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
     if (!colorHolderPtr || colorHolderPtr < 0x1000) return;
     float* colorHolder = reinterpret_cast<float*>(colorHolderPtr);
     float saved[4] = {colorHolder[0], colorHolder[1], colorHolder[2], colorHolder[3]};
-    colorHolder[0] = colorHolder[1] = colorHolder[2] = colorHolder[3] = 1.0f;
+    colorHolder[0] = 1.0f;
+    colorHolder[1] = 1.0f;
+    colorHolder[2] = 1.0f;
+    colorHolder[3] = 1.0f;
 
-    // Each particle = small X (two crossing lines) for a sparkle look
     const int verts = static_cast<int>(snapshot.size()) * 4;
-    s_tessBegin(tessellator, nullptr, 4 /* lines */, verts, 0);
+    s_tessBegin(tessellator, nullptr, 4, verts, 0);
 
     const float opacity = std::clamp(g_mod->opacity, 0.05f, 1.0f);
-
-    for (const auto& p : snapshot) {
+    for (size_t i = 0; i < snapshot.size(); ++i) {
+        const WorldParticlesModule::Particle& p = snapshot[i];
         float lifeT = std::clamp(p.life / std::max(0.01f, p.maxLife), 0.0f, 1.0f);
         float a = opacity * lifeT;
         if (g_mod->mode == WorldParticlesModule::Mode::Glowfly) {
             a *= 0.45f + 0.55f * (0.5f + 0.5f * std::sin(p.phase * 2.0f));
         }
 
-        const float r = ((p.color >> 16) & 0xFF) / 255.0f;
-        const float g = ((p.color >> 8) & 0xFF) / 255.0f;
-        const float b = (p.color & 0xFF) / 255.0f;
-        s_tessColor(tessellator, r, g, b, a);
+        const float cr = ((p.color >> 16) & 0xFF) / 255.0f;
+        const float cg = ((p.color >> 8) & 0xFF) / 255.0f;
+        const float cb = (p.color & 0xFF) / 255.0f;
+        s_tessColor(tessellator, cr, cg, cb, a);
 
         const float s = p.size;
         const float x = p.x - camX;
         const float y = p.y - camY;
         const float z = p.z - camZ;
 
-        // Cross sparkle in world axes (reads as particle from most angles)
         s_tessVertex(tessellator, x - s, y, z);
         s_tessVertex(tessellator, x + s, y, z);
         s_tessVertex(tessellator, x, y - s, z);
@@ -331,7 +362,7 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
 } // namespace
 
 WorldParticlesModule::WorldParticlesModule()
-    : Module("WorldParticles", "Ambient world particles around you (snow, glowflies, hearts, stars…). Inspired by Ambience.") {
+    : Module("WorldParticles", "Ambient world particles around you (snow, glowflies, hearts, stars).") {
     g_mod = this;
 }
 
@@ -341,28 +372,39 @@ WorldParticlesModule::~WorldParticlesModule() {
 
 void WorldParticlesModule::onInit() {
     uintptr_t addr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel);
-    if (addr) m_patchTarget = reinterpret_cast<void*>(addr);
+    if (addr != 0) {
+        m_patchTarget = reinterpret_cast<void*>(addr);
+    }
 
-    if (auto tb = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorBegin)) {
+    uintptr_t tb = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorBegin);
+    if (tb) {
         m_tessBeginAddr = reinterpret_cast<void*>(tb);
         s_tessBegin = reinterpret_cast<Tessellator_begin_t>(tb);
     }
-    if (auto tc = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorColor)) {
+
+    uintptr_t tc = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorColor);
+    if (tc) {
         m_tessColorAddr = reinterpret_cast<void*>(tc);
         s_tessColor = reinterpret_cast<Tessellator_color_t>(tc);
     }
-    if (auto tv = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex)) {
+
+    uintptr_t tv = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorVertex);
+    if (tv) {
         m_tessVertexAddr = reinterpret_cast<void*>(tv);
         s_tessVertex = reinterpret_cast<Tessellator_vertex_t>(tv);
     }
-    if (auto rm = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2)) {
+
+    uintptr_t rm = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately2);
+    if (rm) {
         m_renderMeshAddr = reinterpret_cast<void*>(rm);
         s_renderMesh = reinterpret_cast<MeshHelpers_renderMeshImmediately_t>(rm);
-    } else if (auto rm5 = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately)) {
-        s_renderMesh = reinterpret_cast<MeshHelpers_renderMeshImmediately_t>(rm5);
+    } else {
+        uintptr_t rm5 = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::MeshHelpersRenderMeshImmediately);
+        if (rm5) s_renderMesh = reinterpret_cast<MeshHelpers_renderMeshImmediately_t>(rm5);
     }
 
-    if (auto rmg = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderMaterialGroupCommon)) {
+    uintptr_t rmg = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderMaterialGroupCommon);
+    if (rmg) {
         m_renderMaterialGroupAddr = reinterpret_cast<void*>(rmg);
         uintptr_t groupAddr = resolveADRP(reinterpret_cast<uint32_t*>(rmg), 2, 0);
         if (groupAddr) {
@@ -386,95 +428,40 @@ void WorldParticlesModule::onEnable() {
 }
 
 void WorldParticlesModule::onDisable() {
-    std::lock_guard lock(particlesMutex);
+    std::lock_guard<std::mutex> lock(particlesMutex);
     particles.clear();
-}
-
-void WorldParticlesModule::onMenuRegistered() {
-    using namespace pl::modmenu;
-    ConfigSchemaV2 schema;
-    schema.category("particles", "Particles", "World particle style and density");
-    schema.category("motion", "Motion", "How particles move");
-    schema.category("look", "Look", "Size, color, opacity");
-
-    auto node = [](std::string key, std::string title, std::string category, ConfigControlTypeV2 type) {
-        ConfigNodeV2 value;
-        value.id = key;
-        value.key = std::move(key);
-        value.title = std::move(title);
-        value.category = std::move(category);
-        value.type = type;
-        return value;
-    };
-    auto section = [&](const char* id, const char* title, const char* category) {
-        auto value = node(id, title, category, ConfigControlTypeV2::Section);
-        value.key.clear();
-        schema.node(std::move(value));
-    };
-    auto slider = [&](const char* key, std::string title, const char* category,
-                      const char* sectionId, const char* min, const char* max) {
-        auto value = node(key, std::move(title), category, ConfigControlTypeV2::SliderFloat);
-        value.section = sectionId;
-        value.minValue = min;
-        value.maxValue = max;
-        value.step = "1";
-        schema.node(std::move(value));
-    };
-
-    section("mode_sec", "Style", "particles");
-    auto mode = node("mode", "Particle Style", "particles", ConfigControlTypeV2::Choice);
-    mode.section = "mode_sec";
-    mode.choiceStyle = ConfigChoiceStyleV2::Segmented;
-    mode.options = {
-        {"0", "Snow"}, {"1", "Hearts"}, {"2", "Stars"}, {"3", "Orbs"},
-        {"4", "Storm"}, {"5", "Snowflake"}, {"6", "Dollar"}, {"7", "Pumpkin"},
-        {"8", "Multi"}, {"9", "Glowfly"}
-    };
-    mode.defaultValue = "0";
-    schema.node(std::move(mode));
-    slider("density", "Density", "particles", "mode_sec", "4", "300");
-    slider("radius", "Radius", "particles", "mode_sec", "4", "48");
-
-    section("motion_sec", "Physics", "motion");
-    slider("fallSpeed", "Fall / Float Speed", "motion", "motion_sec", "0.1", "3");
-    slider("wind", "Wind Strength", "motion", "motion_sec", "0", "2");
-
-    section("look_sec", "Appearance", "look");
-    slider("particleSize", "Particle Size", "look", "look_sec", "0.04", "0.5");
-    slider("opacity", "Opacity", "look", "look_sec", "0.1", "1");
-    auto color = node("colorHex", "Tint Color", "look", ConfigControlTypeV2::Color);
-    color.section = "look_sec";
-    color.defaultValue = "#FFFFFFFF";
-    schema.node(std::move(color));
-    auto rainbowNode = node("rainbow", "Force Custom Tint", "look", ConfigControlTypeV2::Toggle);
-    rainbowNode.section = "look_sec";
-    rainbowNode.defaultValue = "false";
-    rainbowNode.description = "When on, uses Tint Color for every style instead of the preset colors.";
-    schema.node(std::move(rainbowNode));
-
-    pl::modmenu::setConfigSchemaJson(moduleId, schema.toJson());
 }
 
 void WorldParticlesModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
+
     if (j.contains("mode")) {
         try {
-            if (j["mode"].is_number_integer()) mode = static_cast<Mode>(std::clamp(j["mode"].get<int>(), 0, 9));
-            else {
+            if (j["mode"].is_number_integer()) {
+                mode = static_cast<Mode>(std::clamp(j["mode"].get<int>(), 0, 9));
+            } else if (j["mode"].is_number_float()) {
+                mode = static_cast<Mode>(std::clamp(static_cast<int>(j["mode"].get<float>()), 0, 9));
+            } else {
                 std::string v = j["mode"].get<std::string>();
                 const auto comma = v.find(',');
                 if (comma != std::string::npos) v.resize(comma);
                 mode = static_cast<Mode>(std::clamp(std::stoi(v), 0, 9));
             }
-        } catch (...) {}
+        } catch (...) {
+        }
     }
-    if (j.contains("density")) density = std::clamp(j["density"].get<int>(), 4, 400);
+
+    if (j.contains("density")) {
+        if (j["density"].is_number_integer()) density = std::clamp(j["density"].get<int>(), 4, 400);
+        else if (j["density"].is_number_float()) density = std::clamp(static_cast<int>(j["density"].get<float>()), 4, 400);
+    }
     if (j.contains("radius")) radius = std::clamp(j["radius"].get<float>(), 2.0f, 64.0f);
     if (j.contains("fallSpeed")) fallSpeed = std::clamp(j["fallSpeed"].get<float>(), 0.05f, 5.0f);
     if (j.contains("particleSize")) particleSize = std::clamp(j["particleSize"].get<float>(), 0.02f, 1.0f);
     if (j.contains("opacity")) opacity = std::clamp(j["opacity"].get<float>(), 0.05f, 1.0f);
     if (j.contains("colorHex")) colorHex = j["colorHex"].get<std::string>();
-    if (j.contains("rainbow")) rainbow = j["rainbow"].get<bool>();
+    if (j.contains("forceTint")) forceTint = j["forceTint"].get<bool>();
+    if (j.contains("rainbow")) forceTint = j["rainbow"].get<bool>();
     if (j.contains("wind")) wind = std::clamp(j["wind"].get<float>(), 0.0f, 3.0f);
 }
 
@@ -487,6 +474,6 @@ void WorldParticlesModule::saveConfig(nlohmann::json& j) {
     j["particleSize"] = particleSize;
     j["opacity"] = opacity;
     j["colorHex"] = colorHex;
-    j["rainbow"] = rainbow;
+    j["forceTint"] = forceTint;
     j["wind"] = wind;
 }
