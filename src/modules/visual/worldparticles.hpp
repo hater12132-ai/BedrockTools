@@ -52,7 +52,7 @@ public:
     std::string colorHex = "#FFFFFFFF";
     bool forceTint = false;
     int fireflyCount = 30;
-    float fireflyScale = 0.22f;
+    float fireflyScale = 0.28f;
     int trailLength = 12;
     float linkDistance = 5.0f;
     int maxLinks = 3;

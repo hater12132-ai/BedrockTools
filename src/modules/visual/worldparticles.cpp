@@ -138,12 +138,9 @@ static std::uint32_t modeColor(WorldParticlesModule::Mode mode, int style, float
         case WorldParticlesModule::Mode::Flame:      return 0xFFFF7A1Au;
         case WorldParticlesModule::Mode::Snowflake:  return 0xFFDCF4FFu;
         case WorldParticlesModule::Mode::Virus:      return 0xFF6CFF3Au;
-        case WorldParticlesModule::Mode::Firefly: {
-            // Warm yellow-green pulse
-            const float t = 0.55f + 0.45f * std::sin(phase * 2.7f);
-            const std::uint8_t a = static_cast<std::uint8_t>(160.0f + 95.0f * t);
-            return (static_cast<std::uint32_t>(a) << 24) | 0x00FFE84Au;
-        }
+        case WorldParticlesModule::Mode::Firefly:
+            // Solid gray cube matching Soup-style diamond particle
+            return 0xFF9A9A9Au;
         case WorldParticlesModule::Mode::Network:    return 0xFF5CC8FFu;
         case WorldParticlesModule::Mode::Cube:       return 0xFFB08CFFu;
         case WorldParticlesModule::Mode::Pyramid:    return 0xFFFFA83Au;
@@ -218,7 +215,9 @@ static void spawnOne(WorldParticlesModule* mod, float px, float py, float pz, bo
     p.life = p.maxLife;
     p.phase = randf(0.0f, 6.28f);
     p.rot = randf(0.0f, 6.28f);
-    p.rotSpeed = randf(-0.12f, 0.12f);
+    // Fireflies: steady visible spin; others: gentle tumble
+    p.rotSpeed = p.isFirefly ? randf(0.08f, 0.16f) * (randf(0.0f, 1.0f) < 0.5f ? -1.0f : 1.0f)
+                             : randf(-0.12f, 0.12f);
     p.style = static_cast<int>(randf(0.0f, 7.99f));
     p.color = modeColor(mod->mode, p.style, p.phase);
     if (mod->forceTint) p.color = parseColor(mod->colorHex, p.color);
@@ -348,9 +347,9 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
 
     // Budget: glowing dot = several radial lines (core + glow rings) + trails + network
     // 8 spokes * 3 rings = 24 lines per particle worst case
-    int segs = static_cast<int>(snapshot.size()) * 28;
+    int segs = static_cast<int>(snapshot.size()) * 40; // cube fills + trails + network
     for (const auto& p : snapshot)
-        if (p.trail.size() > 1) segs += static_cast<int>(p.trail.size()) - 1;
+        if (p.trail.size() > 1) segs += static_cast<int>(p.trail.size()) * 20;
     if (g_mod->mode == WorldParticlesModule::Mode::Network || g_mod->mode == WorldParticlesModule::Mode::Multi)
         segs += static_cast<int>(snapshot.size()) * std::max(1, g_mod->maxLinks);
 
@@ -367,37 +366,74 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
         s_tessVertex(tessellator, x1 - camX, y1 - camY, z1 - camZ);
     };
 
-    // Draw a soft glowing disc approximated by radial spokes + rings
-    auto emitGlowDot = [&](float x, float y, float z, float size, float cr, float cg, float cb, float a, float pulse) {
-        const float core = size * (0.35f + 0.15f * pulse);
-        const float mid  = size * (0.85f + 0.25f * pulse);
-        const float outer = size * (1.6f + 0.5f * pulse) * (0.7f + 0.3f * glow);
+    // Soup-style solid diamond/cube face: filled rhombus with continuous rotation.
+    // Matches the gray cubic particle look (rotated square).
+    auto emitRotatingCube = [&](float x, float y, float z, float size, float angle,
+                                float cr, float cg, float cb, float a) {
+        // Local diamond corners in particle plane (XZ + Y), then rotate around Y and slight tilt
+        const float c = std::cos(angle);
+        const float s = std::sin(angle);
+        const float c2 = std::cos(angle * 0.65f); // secondary axis for 3D cube feel
+        const float s2 = std::sin(angle * 0.65f);
+        const float hs = size; // half-size of the diamond face
 
-        // Bright core cross
-        s_tessColor(tessellator, 1.0f, 1.0f, 1.0f, a * 0.95f);
-        emitLine(x - core, y, z, x + core, y, z);
-        emitLine(x, y - core, z, x, y + core, z);
-        emitLine(x - core * 0.7f, y, z - core * 0.7f, x + core * 0.7f, y, z + core * 0.7f);
-        emitLine(x - core * 0.7f, y, z + core * 0.7f, x + core * 0.7f, y, z - core * 0.7f);
+        // Unit diamond in local space (flat square rotated 45° = rhombus on screen)
+        // corners: right, top, left, bottom
+        struct V { float lx, ly, lz; };
+        V local[4] = {
+            { hs,  0.0f,  0.0f },
+            { 0.0f, hs,   0.0f },
+            {-hs,  0.0f,  0.0f },
+            { 0.0f,-hs,   0.0f }
+        };
 
-        // Mid ring (tinted)
-        s_tessColor(tessellator, cr, cg, cb, a * 0.55f * glow);
-        constexpr int spokes = 8;
-        for (int i = 0; i < spokes; ++i) {
-            const float a0 = (6.2831853f * static_cast<float>(i)) / static_cast<float>(spokes);
-            const float a1 = (6.2831853f * static_cast<float>(i + 1)) / static_cast<float>(spokes);
-            emitLine(x + std::cos(a0) * mid, y + std::sin(a0) * mid * 0.35f, z + std::sin(a0) * mid,
-                     x + std::cos(a1) * mid, y + std::sin(a1) * mid * 0.35f, z + std::sin(a1) * mid);
+        float wx[4], wy[4], wz[4];
+        for (int i = 0; i < 4; ++i) {
+            // rotate around Y
+            float rx = local[i].lx * c + local[i].lz * s;
+            float rz = -local[i].lx * s + local[i].lz * c;
+            // slight rotate around X for depth
+            float ry = local[i].ly * c2 - rz * s2;
+            rz = local[i].ly * s2 + rz * c2;
+            wx[i] = x + rx;
+            wy[i] = y + ry;
+            wz[i] = z + rz;
         }
 
-        // Soft outer glow
-        s_tessColor(tessellator, cr, cg, cb, a * 0.22f * glow);
-        for (int i = 0; i < spokes; ++i) {
-            const float ang = (6.2831853f * static_cast<float>(i)) / static_cast<float>(spokes);
-            const float cx = std::cos(ang), cz = std::sin(ang);
-            emitLine(x, y, z, x + cx * outer, y, z + cz * outer);
-            emitLine(x, y, z, x, y + std::sin(ang) * outer * 0.55f, z);
+        // Filled solid look: many parallel scanlines across the diamond
+        s_tessColor(tessellator, cr, cg, cb, a);
+        constexpr int fills = 14;
+        for (int f = 0; f <= fills; ++f) {
+            const float t = static_cast<float>(f) / static_cast<float>(fills);
+            // Interpolate left edge (top->left->bottom) and right edge (top->right->bottom)
+            // Split diamond into top and bottom halves
+            float lx, ly, lz, rx, ry, rz;
+            if (t <= 0.5f) {
+                const float u = t * 2.0f; // 0..1 top half: top -> left/right
+                lx = wx[1] + (wx[2] - wx[1]) * u;
+                ly = wy[1] + (wy[2] - wy[1]) * u;
+                lz = wz[1] + (wz[2] - wz[1]) * u;
+                rx = wx[1] + (wx[0] - wx[1]) * u;
+                ry = wy[1] + (wy[0] - wy[1]) * u;
+                rz = wz[1] + (wz[0] - wz[1]) * u;
+            } else {
+                const float u = (t - 0.5f) * 2.0f; // 0..1 bottom: left/right -> bottom
+                lx = wx[2] + (wx[3] - wx[2]) * u;
+                ly = wy[2] + (wy[3] - wy[2]) * u;
+                lz = wz[2] + (wz[3] - wz[2]) * u;
+                rx = wx[0] + (wx[3] - wx[0]) * u;
+                ry = wy[0] + (wy[3] - wy[0]) * u;
+                rz = wz[0] + (wz[3] - wz[0]) * u;
+            }
+            emitLine(lx, ly, lz, rx, ry, rz);
         }
+
+        // Crisp outline
+        s_tessColor(tessellator, cr, cg, cb, std::min(1.0f, a * 1.05f));
+        emitLine(wx[0], wy[0], wz[0], wx[1], wy[1], wz[1]);
+        emitLine(wx[1], wy[1], wz[1], wx[2], wy[2], wz[2]);
+        emitLine(wx[2], wy[2], wz[2], wx[3], wy[3], wz[3]);
+        emitLine(wx[3], wy[3], wz[3], wx[0], wy[0], wz[0]);
     };
 
     for (size_t i = 0; i < snapshot.size(); ++i) {
@@ -418,17 +454,25 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
         const float cb = (p.color & 0xFF) / 255.0f;
 
         if (p.isFirefly) {
-            // Glowing flying dot
-            emitGlowDot(p.x, p.y, p.z, p.size, cr, cg, cb, a, pulse);
+            // Exact gray rotating cubic/diamond particle (Soup-style)
+            float fcr = cr, fcg = cg, fcb = cb;
+            if (!g_mod->forceTint) {
+                fcr = 0.604f; // #9A9A9A
+                fcg = 0.604f;
+                fcb = 0.604f;
+            }
+            // Continuous rotation animation
+            const float spin = p.rot + p.phase * 0.35f;
+            emitRotatingCube(p.x, p.y, p.z, p.size, spin, fcr, fcg, fcb, a);
 
-            // Smooth trail
+            // Soft trailing cubes (smaller, fading)
             if (p.trail.size() > 1) {
-                for (size_t t = 1; t < p.trail.size(); ++t) {
-                    const float ta = a * (static_cast<float>(t) / static_cast<float>(p.trail.size())) * 0.55f;
-                    s_tessColor(tessellator, cr, cg, cb, ta);
-                    const auto& a0 = p.trail[t - 1];
-                    const auto& a1 = p.trail[t];
-                    emitLine(a0.x, a0.y, a0.z, a1.x, a1.y, a1.z);
+                const size_t step = std::max<size_t>(1, p.trail.size() / 6);
+                for (size_t t = 0; t < p.trail.size(); t += step) {
+                    const float ta = a * (static_cast<float>(t + 1) / static_cast<float>(p.trail.size())) * 0.35f;
+                    const float ts = p.size * (0.35f + 0.45f * (static_cast<float>(t) / static_cast<float>(p.trail.size())));
+                    const auto& tp = p.trail[t];
+                    emitRotatingCube(tp.x, tp.y, tp.z, ts, spin + static_cast<float>(t) * 0.15f, fcr, fcg, fcb, ta);
                 }
             }
         } else {
