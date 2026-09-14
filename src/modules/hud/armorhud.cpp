@@ -682,26 +682,57 @@ static std::size_t applyBarLayout(
 
 void ArmorHudModule::submitEditorElements(const ConfigSnapshot& config) {
     std::vector<pl::modmenu::HudEditorElement> elements;
-    elements.reserve(SlotCount);
-    for (std::size_t i = 0; i < SlotCount; ++i) {
-        const SlotConfig& slot = config.slots[i];
-        if (!slot.enabled) continue;
+
+    if (config.barStyle) {
+        // Single movable element for the whole capsule bar
+        std::size_t count = 0;
+        for (std::size_t i = 0; i < SlotCount; ++i) {
+            if (!config.slots[i].enabled) continue;
+            if (config.onlyEquipped && !m_runtime[i].hasItem.load(std::memory_order_acquire)) continue;
+            ++count;
+        }
+        if (count == 0) count = 1;
+        const float icon = std::max(8.0f, config.barIconSize);
+        const float pad = config.barPadding;
+        const float gap = config.barGap;
+        const float contentW = static_cast<float>(count) * icon + static_cast<float>(count - 1) * gap;
+
         pl::modmenu::HudEditorElement element;
-        element.elementId = HudElementIds[i];
-        element.displayName = HudElementNames[i];
-        element.positionKeyX = HudXKeys[i];
-        element.positionKeyY = HudYKeys[i];
-        element.x = slot.x;
-        element.y = slot.y;
-        const float widthScale = config.hotbarBackground ? HotbarCellWidth / VanillaItemSize : 1.0f;
-        const float heightScale = config.hotbarBackground ? HotbarCellHeight / VanillaItemSize : 1.0f;
-        element.width = std::max(1.0f, slot.size * widthScale);
-        element.height = std::max(1.0f, slot.size * heightScale);
+        element.elementId = "bedrocktools.armorhud.bar";
+        element.displayName = "ArmorHUD";
+        element.positionKeyX = "hudBarPosX";
+        element.positionKeyY = "hudBarPosY";
+        element.x = config.barPosX;
+        element.y = config.barPosY;
+        element.width = std::max(1.0f, contentW + pad * 2.0f);
+        element.height = std::max(1.0f, icon + pad * 2.0f);
         element.gridSize = config.gridSize;
         element.snapThreshold = config.snapThreshold;
         element.gridGap = config.gridGap;
         element.snapFlags = config.snapFlags;
         elements.push_back(std::move(element));
+    } else {
+        elements.reserve(SlotCount);
+        for (std::size_t i = 0; i < SlotCount; ++i) {
+            const SlotConfig& slot = config.slots[i];
+            if (!slot.enabled) continue;
+            pl::modmenu::HudEditorElement element;
+            element.elementId = HudElementIds[i];
+            element.displayName = HudElementNames[i];
+            element.positionKeyX = HudXKeys[i];
+            element.positionKeyY = HudYKeys[i];
+            element.x = slot.x;
+            element.y = slot.y;
+            const float widthScale = config.hotbarBackground ? HotbarCellWidth / VanillaItemSize : 1.0f;
+            const float heightScale = config.hotbarBackground ? HotbarCellHeight / VanillaItemSize : 1.0f;
+            element.width = std::max(1.0f, slot.size * widthScale);
+            element.height = std::max(1.0f, slot.size * heightScale);
+            element.gridSize = config.gridSize;
+            element.snapThreshold = config.snapThreshold;
+            element.gridGap = config.gridGap;
+            element.snapFlags = config.snapFlags;
+            elements.push_back(std::move(element));
+        }
     }
     pl::modmenu::submitHudEditorElements(moduleId, elements);
 }
