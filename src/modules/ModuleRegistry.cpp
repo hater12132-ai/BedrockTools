@@ -4,7 +4,6 @@
 #include "visual/fpsunlocker.hpp"
 #include "visual/fogcolor.hpp"
 #include "visual/glintcolor.hpp"
-#include "visual/hitoutline.hpp"
 #include "visual/tnttimer.hpp"
 #include "visual/nofog.hpp"
 #include "hud/pingcounter.hpp"
@@ -40,6 +39,7 @@
 #include "visual/zoom.hpp"
 #include "visual/cinematiccamera.hpp"
 #include "visual/breadcrumbs.hpp"
+#include "visual/worldparticles.hpp"
 #include "visual/lightoverlay.hpp"
 #include "visual/shulkerpreview.hpp"
 #include "visual/connectedglass.hpp"
@@ -93,7 +93,6 @@ void registerAllModules() {
     registry.emplace<MotionBlurModule>();
     registry.emplace<FogColorModule>();
     registry.emplace<GlintColorModule>();
-    registry.emplace<HitOutlineModule>();
     registry.emplace<TntTimerModule>();
     registry.emplace<NoFogModule>();
     registry.emplace<PingCounterModule>();
@@ -129,6 +128,7 @@ void registerAllModules() {
     registry.emplace<ZoomModule>();
     registry.emplace<CinematicCameraModule>();
     registry.emplace<BreadcrumbsModule>();
+    registry.emplace<WorldParticlesModule>();
     registry.emplace<SkinStealerModule>();
     registry.emplace<AutoGG>();
     registry.emplace<HiveUtilsModule>();
