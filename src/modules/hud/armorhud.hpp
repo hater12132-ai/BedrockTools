@@ -55,8 +55,8 @@ private:
         std::uint32_t snapFlags;
         // Capsule bar style (screenshot look)
         bool barStyle;
-        float barPosX;
-        float barPosY;
+        float barPosX; // = hudPosX
+        float barPosY; // = hudPosY
         float barIconSize;
         float barPadding;
         float barGap;
@@ -132,20 +132,22 @@ private:
 
     // Horizontal black capsule bar (screenshot style)
     bool m_barStyle = true;
-    float hudBarPosX = 200.0f;
-    float hudBarPosY = 40.0f;
-    float m_barIconSize = 28.0f;
+    // Standard keys so Levi HUD editor can drag the bar (same as PotionHUD)
+    float hudPosX = 200.0f;
+    float hudPosY = 40.0f;
+    float m_barIconSize = 28.0f; // used when a slot has no size override
     float m_barPadding = 10.0f;
     float m_barGap = 6.0f;
     float m_barRadius = 14.0f;
     std::string m_barColor = "#FF000000"; // full black
-    bool m_showGlow = true;
-    std::string m_glowColor = "#6640E0FF"; // soft cyan
-    float m_glowAmount = 0.55f;
-    bool m_space = true; // little white stars flying in the card
+    bool m_showGlow = false; // off by default → pure black, not cyan
+    std::string m_glowColor = "#6640E0FF";
+    float m_glowAmount = 0.35f;
+    bool m_space = true;
     int m_starCount = 18;
     float m_starSpeed = 1.0f;
     bool m_onlyEquipped = true;
+    bool isHudModule = true;
 
     struct Star {
         float x = 0.0f; // 0..1 inside card

@@ -557,7 +557,7 @@ void ArmorHudModule::onMenuRegistered() {
     section("bar_glow", "Glow", "bar");
     auto showGlow = node("m_showGlow", "Soft Glow", "bar", ConfigControlTypeV2::Toggle);
     showGlow.section = "bar_glow";
-    showGlow.defaultValue = "true";
+    showGlow.defaultValue = "false";
     showGlow.visibleWhen = {{"m_barStyle", ConfigConditionOpV2::Truthy, {}}};
     schema.node(std::move(showGlow));
     auto glowColor = node("m_glowColor", "Glow Color", "bar", ConfigControlTypeV2::Color);
@@ -611,8 +611,8 @@ ArmorHudModule::ConfigSnapshot ArmorHudModule::snapshotConfig() const {
             (m_snapToElements ? pl::modmenu::HudSnapElements : pl::modmenu::HudSnapNone) |
             (m_snapToScreenCenter ? pl::modmenu::HudSnapScreenCenter : pl::modmenu::HudSnapNone),
         m_barStyle,
-        hudBarPosX,
-        hudBarPosY,
+        hudPosX,
+        hudPosY,
         m_barIconSize,
         m_barPadding,
         m_barGap,
@@ -637,13 +637,14 @@ void ArmorHudModule::clearRuntime() {
 }
 
 // When capsule-bar style is on, rewrite slot x/y/size into a horizontal row
-// inside the black card. Returns number of visible icons.
+// inside the black card. Each slot keeps its own size from settings.
 static std::size_t applyBarLayout(
     bool barStyle,
     bool onlyEquipped,
     float barPosX, float barPosY, float barIconSize, float barPadding, float barGap,
     std::array<bool, 6> hasItem,
     std::array<bool, 6>& enabled,
+    const std::array<float, 6>& slotSizes,
     std::array<float, 6>& outX,
     std::array<float, 6>& outY,
     std::array<float, 6>& outSize,
@@ -660,22 +661,30 @@ static std::size_t applyBarLayout(
     }
     if (visible.empty()) return 0;
 
-    const float icon = std::max(8.0f, barIconSize);
     const float pad = barPadding;
     const float gap = barGap;
-    const float contentW = static_cast<float>(visible.size()) * icon
-        + static_cast<float>(visible.size() - 1) * gap;
+    float contentW = 0.0f;
+    float maxIcon = 0.0f;
+    for (std::size_t n = 0; n < visible.size(); ++n) {
+        const float s = std::max(8.0f, slotSizes[visible[n]] > 0.5f ? slotSizes[visible[n]] : barIconSize);
+        contentW += s;
+        maxIcon = std::max(maxIcon, s);
+        if (n + 1 < visible.size()) contentW += gap;
+    }
     outCardX = barPosX;
     outCardY = barPosY;
     outCardW = contentW + pad * 2.0f;
-    outCardH = icon + pad * 2.0f;
+    outCardH = maxIcon + pad * 2.0f;
 
     for (std::size_t i = 0; i < 6; ++i) outSize[i] = 0.0f;
+    float cursor = outCardX + pad;
     for (std::size_t n = 0; n < visible.size(); ++n) {
         const std::size_t i = visible[n];
-        outSize[i] = icon;
-        outX[i] = outCardX + pad + static_cast<float>(n) * (icon + gap);
-        outY[i] = outCardY + pad;
+        const float s = std::max(8.0f, slotSizes[i] > 0.5f ? slotSizes[i] : barIconSize);
+        outSize[i] = s;
+        outX[i] = cursor;
+        outY[i] = outCardY + pad + (maxIcon - s) * 0.5f;
+        cursor += s + gap;
     }
     return visible.size();
 }
@@ -684,15 +693,17 @@ void ArmorHudModule::submitEditorElements(const ConfigSnapshot& config) {
     std::vector<pl::modmenu::HudEditorElement> elements;
 
     if (config.barStyle) {
-        // Single movable element for the whole capsule bar
+        // Always expose one draggable bar using standard hudPosX/hudPosY
+        // (same keys PotionHUD and every other single-element HUD module use).
         std::size_t count = 0;
+        float maxIcon = config.barIconSize;
         for (std::size_t i = 0; i < SlotCount; ++i) {
             if (!config.slots[i].enabled) continue;
-            if (config.onlyEquipped && !m_runtime[i].hasItem.load(std::memory_order_acquire)) continue;
             ++count;
+            maxIcon = std::max(maxIcon, config.slots[i].size);
         }
         if (count == 0) count = 1;
-        const float icon = std::max(8.0f, config.barIconSize);
+        const float icon = std::max(8.0f, maxIcon);
         const float pad = config.barPadding;
         const float gap = config.barGap;
         const float contentW = static_cast<float>(count) * icon + static_cast<float>(count - 1) * gap;
@@ -700,12 +711,12 @@ void ArmorHudModule::submitEditorElements(const ConfigSnapshot& config) {
         pl::modmenu::HudEditorElement element;
         element.elementId = "bedrocktools.armorhud.bar";
         element.displayName = "ArmorHUD";
-        element.positionKeyX = "hudBarPosX";
-        element.positionKeyY = "hudBarPosY";
+        element.positionKeyX = "hudPosX";
+        element.positionKeyY = "hudPosY";
         element.x = config.barPosX;
         element.y = config.barPosY;
-        element.width = std::max(1.0f, contentW + pad * 2.0f);
-        element.height = std::max(1.0f, icon + pad * 2.0f);
+        element.width = std::max(40.0f, contentW + pad * 2.0f);
+        element.height = std::max(24.0f, icon + pad * 2.0f);
         element.gridSize = config.gridSize;
         element.snapThreshold = config.snapThreshold;
         element.gridGap = config.gridGap;
@@ -755,14 +766,16 @@ void ArmorHudModule::renderNative(void* context, void* client) {
     if (config.barStyle) {
         std::array<bool, 6> hasItem{};
         std::array<bool, 6> enabled{};
+        std::array<float, 6> slotSizes{};
         std::array<float, 6> bx{}, by{}, bs{};
         for (std::size_t i = 0; i < 6; ++i) {
             hasItem[i] = getStackItem(stacks[i]) != nullptr;
             enabled[i] = config.slots[i].enabled;
+            slotSizes[i] = config.slots[i].size;
         }
         applyBarLayout(config.barStyle, config.onlyEquipped, config.barPosX, config.barPosY,
                        config.barIconSize, config.barPadding, config.barGap,
-                       hasItem, enabled, bx, by, bs, cardX, cardY, cardW, cardH);
+                       hasItem, enabled, slotSizes, bx, by, bs, cardX, cardY, cardW, cardH);
         for (std::size_t i = 0; i < 6; ++i) {
             config.slots[i].x = bx[i];
             config.slots[i].y = by[i];
@@ -925,20 +938,23 @@ void ArmorHudModule::onFrame() {
     if (config.barStyle) {
         std::array<bool, 6> hasItem{};
         std::array<bool, 6> enabled{};
+        std::array<float, 6> slotSizes{};
         std::array<float, 6> bx{}, by{}, bs{};
         for (std::size_t i = 0; i < 6; ++i) {
             hasItem[i] = m_runtime[i].hasItem.load(std::memory_order_acquire);
             enabled[i] = config.slots[i].enabled;
+            slotSizes[i] = config.slots[i].size;
         }
         barIcons = applyBarLayout(config.barStyle, config.onlyEquipped, config.barPosX, config.barPosY,
                                   config.barIconSize, config.barPadding, config.barGap,
-                                  hasItem, enabled, bx, by, bs, cardX, cardY, cardW, cardH);
+                                  hasItem, enabled, slotSizes, bx, by, bs, cardX, cardY, cardW, cardH);
         for (std::size_t i = 0; i < 6; ++i) {
             config.slots[i].x = bx[i];
             config.slots[i].y = by[i];
             config.slots[i].size = bs[i];
         }
     }
+    // Always refresh editor element so the bar stays draggable
     submitEditorElements(config);
 
     std::vector<pl::modmenu::DrawCommand> commands;
@@ -1136,8 +1152,12 @@ void ArmorHudModule::loadConfig(const nlohmann::json& j) {
     if (j.contains("m_snapToScreenCenter")) m_snapToScreenCenter = j["m_snapToScreenCenter"].get<bool>();
 
     if (j.contains("m_barStyle")) m_barStyle = j["m_barStyle"].get<bool>();
-    if (j.contains("hudBarPosX")) hudBarPosX = std::clamp(j["hudBarPosX"].get<float>(), 0.0f, 4000.0f);
-    if (j.contains("hudBarPosY")) hudBarPosY = std::clamp(j["hudBarPosY"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("hudPosX")) hudPosX = std::clamp(j["hudPosX"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("hudPosY")) hudPosY = std::clamp(j["hudPosY"].get<float>(), 0.0f, 4000.0f);
+    // Legacy keys from earlier bar builds
+    if (j.contains("hudBarPosX")) hudPosX = std::clamp(j["hudBarPosX"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("hudBarPosY")) hudPosY = std::clamp(j["hudBarPosY"].get<float>(), 0.0f, 4000.0f);
+    if (j.contains("isHudModule")) isHudModule = j["isHudModule"].get<bool>();
     if (j.contains("m_barIconSize")) m_barIconSize = std::clamp(j["m_barIconSize"].get<float>(), 8.0f, 100.0f);
     if (j.contains("m_barPadding")) m_barPadding = std::clamp(j["m_barPadding"].get<float>(), 0.0f, 40.0f);
     if (j.contains("m_barGap")) m_barGap = std::clamp(j["m_barGap"].get<float>(), 0.0f, 24.0f);
@@ -1209,8 +1229,9 @@ void ArmorHudModule::saveConfig(nlohmann::json& j) {
     j["m_snapToScreenCenter"] = m_snapToScreenCenter;
 
     j["m_barStyle"] = m_barStyle;
-    j["hudBarPosX"] = hudBarPosX;
-    j["hudBarPosY"] = hudBarPosY;
+    j["hudPosX"] = hudPosX;
+    j["hudPosY"] = hudPosY;
+    j["isHudModule"] = true;
     j["m_barIconSize"] = m_barIconSize;
     j["m_barPadding"] = m_barPadding;
     j["m_barGap"] = m_barGap;
