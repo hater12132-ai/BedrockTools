@@ -18,24 +18,23 @@
 
 namespace {
 
-typedef void (*Tessellator_begin_t)(void* tessellator, void* debugCallback, int primitiveMode, int vertexCount, int noIndices);
-typedef void (*Tessellator_color_t)(void* tessellator, float r, float g, float b, float a);
-typedef void (*Tessellator_vertex_t)(void* tessellator, float x, float y, float z);
-typedef void (*MeshHelpers_renderMeshImmediately_t)(void* screenContext, void* tessellator, void* material, char* pad);
+typedef void (*Tessellator_begin_t)(void*, void*, int, int, int);
+typedef void (*Tessellator_color_t)(void*, float, float, float, float);
+typedef void (*Tessellator_vertex_t)(void*, float, float, float);
+typedef void (*MeshHelpers_renderMeshImmediately_t)(void*, void*, void*, char*);
 
 struct HashedString {
-    uint64_t mStrHash;
+    uint64_t mStrHash = 0;
     std::string mStr;
-    mutable const HashedString* mLastMatch;
-
-    HashedString() : mStrHash(0), mStr(), mLastMatch(nullptr) {}
-    explicit HashedString(const char* str) : mLastMatch(nullptr) {
+    mutable const HashedString* mLastMatch = nullptr;
+    HashedString() = default;
+    explicit HashedString(const char* str) {
         mStr = str ? str : "";
         constexpr uint64_t kOffset = 0xCBF29CE484222325ULL;
         constexpr uint64_t kPrime = 0x100000001B3ULL;
         uint64_t hash = kOffset;
-        for (size_t i = 0; i < mStr.size(); ++i)
-            hash = static_cast<uint64_t>(static_cast<unsigned char>(mStr[i])) ^ (kPrime * hash);
+        for (unsigned char ch : mStr)
+            hash = static_cast<uint64_t>(ch) ^ (kPrime * hash);
         mStrHash = hash;
     }
 };
@@ -45,7 +44,9 @@ struct MaterialPtr {
     MaterialPtr() = default;
     MaterialPtr(const MaterialPtr&) = delete;
     MaterialPtr& operator=(const MaterialPtr&) = delete;
-    MaterialPtr(MaterialPtr&& o) noexcept : sharedPtrData{o.sharedPtrData[0], o.sharedPtrData[1]} {
+    MaterialPtr(MaterialPtr&& o) noexcept {
+        sharedPtrData[0] = o.sharedPtrData[0];
+        sharedPtrData[1] = o.sharedPtrData[1];
         o.sharedPtrData[0] = o.sharedPtrData[1] = nullptr;
     }
     MaterialPtr& operator=(MaterialPtr&& o) noexcept {
@@ -61,7 +62,7 @@ struct MaterialPtr {
 };
 
 static WorldParticlesModule* g_mod = nullptr;
-static uint32_t s_rngState = 0xC0FFEEu;
+static uint32_t s_rng = 0x91A2B3C4u;
 
 static Tessellator_begin_t s_tessBegin = nullptr;
 static Tessellator_color_t s_tessColor = nullptr;
@@ -69,15 +70,15 @@ static Tessellator_vertex_t s_tessVertex = nullptr;
 static MeshHelpers_renderMeshImmediately_t s_renderMesh = nullptr;
 static MaterialPtr s_matSelection;
 static uintptr_t s_renderMaterialGroup = 0;
-static void (*s_renderLevelOrig)(void* self, void* screenContext, void* a3) = nullptr;
+static void (*s_renderLevelOrig)(void*, void*, void*) = nullptr;
 
 static float randf(float lo, float hi) {
-    s_rngState = s_rngState * 1664525u + 1013904223u;
-    const float t = static_cast<float>((s_rngState >> 8) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
+    s_rng = s_rng * 1664525u + 1013904223u;
+    const float t = static_cast<float>((s_rng >> 8) & 0xFFFFFFu) / static_cast<float>(0xFFFFFFu);
     return lo + (hi - lo) * t;
 }
 
-static std::uint32_t parseColor(const std::string& value, std::uint32_t fallback = 0xFFFFFFFFu) {
+static std::uint32_t parseColor(const std::string& value, std::uint32_t fallback) {
     if (value.empty()) return fallback;
     const std::string hex = value[0] == '#' ? value.substr(1) : value;
     try {
@@ -128,58 +129,55 @@ static void ensureMaterials() {
     s_matSelection = getMaterial("selection_box");
 }
 
-// SoupVisuals-style preset tints per mode
 static std::uint32_t modeColor(WorldParticlesModule::Mode mode, int style, float phase) {
     switch (mode) {
-        case WorldParticlesModule::Mode::Hearts: return 0xFFFF4D7Au;
-        case WorldParticlesModule::Mode::Bloom: return 0xFFFFC8E0u;
-        case WorldParticlesModule::Mode::Blink: return 0xFFE0F0FFu;
-        case WorldParticlesModule::Mode::Dollar: return 0xFF3DDC84u;
-        case WorldParticlesModule::Mode::Flame: return 0xFFFF8A30u;
-        case WorldParticlesModule::Mode::Snowflake: return 0xFFE8F6FFu;
-        case WorldParticlesModule::Mode::Virus: return 0xFF7CFF4Au;
+        case WorldParticlesModule::Mode::Hearts:     return 0xFFFF3D6Eu;
+        case WorldParticlesModule::Mode::Bloom:      return 0xFFFFB8D4u;
+        case WorldParticlesModule::Mode::Blink:      return 0xFFF0F8FFu;
+        case WorldParticlesModule::Mode::Dollar:     return 0xFF2EE86Au;
+        case WorldParticlesModule::Mode::Flame:      return 0xFFFF7A1Au;
+        case WorldParticlesModule::Mode::Snowflake:  return 0xFFDCF4FFu;
+        case WorldParticlesModule::Mode::Virus:      return 0xFF6CFF3Au;
         case WorldParticlesModule::Mode::Firefly: {
-            const float t = 0.5f + 0.5f * std::sin(phase * 3.0f);
-            const std::uint8_t a = static_cast<std::uint8_t>(140.0f + 115.0f * t);
-            return (static_cast<std::uint32_t>(a) << 24) | 0x00FFE45Au;
+            // Warm yellow-green pulse
+            const float t = 0.55f + 0.45f * std::sin(phase * 2.7f);
+            const std::uint8_t a = static_cast<std::uint8_t>(160.0f + 95.0f * t);
+            return (static_cast<std::uint32_t>(a) << 24) | 0x00FFE84Au;
         }
-        case WorldParticlesModule::Mode::Network: return 0xFF6AD4FFu;
-        case WorldParticlesModule::Mode::Cube: return 0xFFB08CFFu;
-        case WorldParticlesModule::Mode::Pyramid: return 0xFFFFB14Au;
+        case WorldParticlesModule::Mode::Network:    return 0xFF5CC8FFu;
+        case WorldParticlesModule::Mode::Cube:       return 0xFFB08CFFu;
+        case WorldParticlesModule::Mode::Pyramid:    return 0xFFFFA83Au;
         case WorldParticlesModule::Mode::Multi: {
-            static const std::uint32_t palette[] = {
-                0xFFFFFFFFu, 0xFFFF4D7Au, 0xFFFFC8E0u, 0xFF3DDC84u,
-                0xFFFF8A30u, 0xFF6AD4FFu, 0xFFB08CFFu, 0xFFE8F6FFu
+            static const std::uint32_t pal[] = {
+                0xFFFFF4B0u, 0xFFFF3D6Eu, 0xFFFFB8D4u, 0xFF2EE86Au,
+                0xFFFF7A1Au, 0xFF5CC8FFu, 0xFFB08CFFu, 0xFFDCF4FFu
             };
-            return palette[style % 8];
+            return pal[style & 7];
         }
         case WorldParticlesModule::Mode::Stars:
         default:
-            return 0xFFFFF6C8u;
+            return 0xFFFFF2A8u;
     }
 }
 
-// Soup AbstractParticle.initMotion(Fall / Fly / Emerge)
+// Soup AbstractParticle.initMotion
 static void initMotion(WorldParticlesModule::Particle& p, WorldParticlesModule::Physics phys, float speedMul) {
     switch (phys) {
         case WorldParticlesModule::Physics::Fall:
-            // motionX=0, motionY in [-0.2, -0.05], motionZ=0
             p.vx = 0.0f;
-            p.vy = randf(-0.20f, -0.05f) * speedMul;
+            p.vy = randf(-0.18f, -0.04f) * speedMul;
             p.vz = 0.0f;
             break;
         case WorldParticlesModule::Physics::Emerge:
-            // XZ [-0.2,0.2], Y [0.4,0.7]
-            p.vx = randf(-0.20f, 0.20f) * speedMul;
-            p.vy = randf(0.40f, 0.70f) * speedMul;
-            p.vz = randf(-0.20f, 0.20f) * speedMul;
+            p.vx = randf(-0.18f, 0.18f) * speedMul;
+            p.vy = randf(0.35f, 0.65f) * speedMul;
+            p.vz = randf(-0.18f, 0.18f) * speedMul;
             break;
         case WorldParticlesModule::Physics::Fly:
         default:
-            // XZ [-0.4,0.4], Y [-0.1,0.1]
-            p.vx = randf(-0.40f, 0.40f) * speedMul;
-            p.vy = randf(-0.10f, 0.10f) * speedMul;
-            p.vz = randf(-0.40f, 0.40f) * speedMul;
+            p.vx = randf(-0.35f, 0.35f) * speedMul;
+            p.vy = randf(-0.08f, 0.08f) * speedMul;
+            p.vz = randf(-0.35f, 0.35f) * speedMul;
             break;
     }
 }
@@ -189,42 +187,43 @@ static void spawnOne(WorldParticlesModule* mod, float px, float py, float pz, bo
     const float radius = std::max(2.0f, mod->spawnRadius);
     const float height = std::max(1.0f, mod->spawnHeight);
 
-    // Soup-style: horizontal disc + vertical band around player
+    // Uniform disc around player
     const float ang = randf(0.0f, 6.2831853f);
-    const float dist = std::sqrt(randf(0.0f, 1.0f)) * radius;
+    const float dist = std::sqrt(randf(0.15f, 1.0f)) * radius;
     p.x = px + std::cos(ang) * dist;
     p.z = pz + std::sin(ang) * dist;
-    p.y = py + randf(-height * 0.25f, height);
+    p.y = py + randf(-height * 0.2f, height);
 
     p.isFirefly = asFirefly || mod->mode == WorldParticlesModule::Mode::Firefly;
 
     WorldParticlesModule::Physics phys = mod->physics;
     if (p.isFirefly) phys = WorldParticlesModule::Physics::Fly;
 
-    const float speedMul = std::max(0.15f, mod->speed);
+    const float speedMul = std::max(0.2f, mod->speed);
     initMotion(p, phys, speedMul);
 
     if (p.isFirefly) {
-        p.vx *= 0.35f;
-        p.vy = randf(-0.03f, 0.05f) * speedMul;
-        p.vz *= 0.35f;
-        p.maxLife = randf(60.0f, 140.0f); // ticks
-        p.size = mod->fireflyScale * randf(0.7f, 1.3f);
-        p.trail.reserve(static_cast<size_t>(std::max(2, mod->trailLength)));
+        // Gentle wander — glowing dots that slowly float
+        p.vx = randf(-0.12f, 0.12f) * speedMul;
+        p.vy = randf(-0.04f, 0.06f) * speedMul;
+        p.vz = randf(-0.12f, 0.12f) * speedMul;
+        p.maxLife = randf(80.0f, 160.0f);
+        p.size = mod->fireflyScale * randf(0.85f, 1.25f);
+        p.trail.reserve(static_cast<size_t>(std::max(3, mod->trailLength)));
     } else {
-        p.maxLife = randf(40.0f, 110.0f); // ticks
-        p.size = mod->particleSize * randf(0.7f, 1.4f);
+        p.maxLife = randf(45.0f, 120.0f);
+        p.size = mod->particleSize * randf(0.75f, 1.35f);
     }
 
     p.life = p.maxLife;
     p.phase = randf(0.0f, 6.28f);
     p.rot = randf(0.0f, 6.28f);
-    p.rotSpeed = randf(-0.08f, 0.08f);
+    p.rotSpeed = randf(-0.12f, 0.12f);
     p.style = static_cast<int>(randf(0.0f, 7.99f));
     p.color = modeColor(mod->mode, p.style, p.phase);
     if (mod->forceTint) p.color = parseColor(mod->colorHex, p.color);
 
-    mod->particles.push_back(p);
+    mod->particles.push_back(std::move(p));
 }
 
 static void tickParticles(void* player) {
@@ -236,32 +235,41 @@ static void tickParticles(void* player) {
     std::lock_guard<std::mutex> lock(g_mod->particlesMutex);
     auto& list = g_mod->particles;
 
-    // Soup motion values are per game tick.
     for (size_t i = 0; i < list.size(); ++i) {
         auto& p = list[i];
         p.x += p.vx;
         p.y += p.vy;
         p.z += p.vz;
-        p.phase += 0.12f;
+        p.phase += 0.15f;
         p.rot += p.rotSpeed;
         p.life -= 1.0f;
 
         if (p.isFirefly) {
-            p.vx += std::sin(p.phase) * 0.008f;
-            p.vz += std::cos(p.phase * 0.85f) * 0.008f;
-            p.vx *= 0.96f;
-            p.vz *= 0.96f;
-            p.vy *= 0.98f;
+            // Organic wandering (Soup firefly feel)
+            p.vx += std::sin(p.phase * 1.3f) * 0.012f;
+            p.vz += std::cos(p.phase * 0.9f) * 0.012f;
+            p.vy += std::sin(p.phase * 0.55f + 1.7f) * 0.006f;
+            p.vx *= 0.94f;
+            p.vy *= 0.95f;
+            p.vz *= 0.94f;
+            // Soft speed clamp so they never zip
+            const float spd = std::sqrt(p.vx * p.vx + p.vy * p.vy + p.vz * p.vz);
+            if (spd > 0.22f) {
+                const float s = 0.22f / spd;
+                p.vx *= s; p.vy *= s; p.vz *= s;
+            }
 
-            const int maxTrail = std::max(2, g_mod->trailLength);
-            WorldParticlesModule::TrailPoint tp{p.x, p.y, p.z};
-            p.trail.push_back(tp);
+            const int maxTrail = std::max(3, g_mod->trailLength);
+            p.trail.push_back({p.x, p.y, p.z});
             if (static_cast<int>(p.trail.size()) > maxTrail) {
                 p.trail.erase(p.trail.begin(),
                     p.trail.begin() + (static_cast<int>(p.trail.size()) - maxTrail));
             }
         } else if (g_mod->physics == WorldParticlesModule::Physics::Fall) {
-            p.vy -= 0.003f;
+            p.vy -= 0.004f;
+        } else if (g_mod->physics == WorldParticlesModule::Physics::Fly) {
+            p.vx *= 0.995f;
+            p.vz *= 0.995f;
         }
     }
 
@@ -274,11 +282,12 @@ static void tickParticles(void* player) {
     }
     list.resize(write);
 
-    const bool fireflyMode = g_mod->mode == WorldParticlesModule::Mode::Firefly;
-    const int regularTarget = fireflyMode ? 0 : std::clamp(g_mod->density, 0, 300);
-    const int fireflyTarget = (fireflyMode || g_mod->mode == WorldParticlesModule::Mode::Multi)
-        ? std::clamp(g_mod->fireflyCount, 0, 120)
-        : 0;
+    const bool fireflyOnly = g_mod->mode == WorldParticlesModule::Mode::Firefly;
+    const int regularTarget = fireflyOnly ? 0 : std::clamp(g_mod->density, 0, 250);
+    const int fireflyTarget =
+        (fireflyOnly || g_mod->mode == WorldParticlesModule::Mode::Multi)
+            ? std::clamp(g_mod->fireflyCount, 0, 100)
+            : 0;
 
     int regular = 0, flies = 0;
     for (const auto& p : list) {
@@ -286,12 +295,12 @@ static void tickParticles(void* player) {
         else ++regular;
     }
 
-    int budget = 12;
+    int budget = 14;
     while (regular < regularTarget && budget-- > 0) {
         spawnOne(g_mod, pos.x, pos.y, pos.z, false);
         ++regular;
     }
-    budget = 8;
+    budget = 10;
     while (flies < fireflyTarget && budget-- > 0) {
         spawnOne(g_mod, pos.x, pos.y, pos.z, true);
         ++flies;
@@ -337,18 +346,18 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
     float saved[4] = {colorHolder[0], colorHolder[1], colorHolder[2], colorHolder[3]};
     colorHolder[0] = colorHolder[1] = colorHolder[2] = colorHolder[3] = 1.0f;
 
-    // Count line segments: each particle = 2 lines (cross), firefly trail segments, network links
-    int segments = static_cast<int>(snapshot.size()) * 2;
-    for (const auto& p : snapshot) {
-        if (p.trail.size() > 1) segments += static_cast<int>(p.trail.size()) - 1;
-    }
-    if (g_mod->mode == WorldParticlesModule::Mode::Network || g_mod->mode == WorldParticlesModule::Mode::Multi) {
-        segments += static_cast<int>(snapshot.size()) * std::max(1, g_mod->maxLinks);
-    }
+    // Budget: glowing dot = several radial lines (core + glow rings) + trails + network
+    // 8 spokes * 3 rings = 24 lines per particle worst case
+    int segs = static_cast<int>(snapshot.size()) * 28;
+    for (const auto& p : snapshot)
+        if (p.trail.size() > 1) segs += static_cast<int>(p.trail.size()) - 1;
+    if (g_mod->mode == WorldParticlesModule::Mode::Network || g_mod->mode == WorldParticlesModule::Mode::Multi)
+        segs += static_cast<int>(snapshot.size()) * std::max(1, g_mod->maxLinks);
 
-    s_tessBegin(tessellator, nullptr, 4 /* lines */, segments * 2, 0);
+    s_tessBegin(tessellator, nullptr, 4, segs * 2, 0);
 
     const float opacity = std::clamp(g_mod->opacity, 0.05f, 1.0f);
+    const float glow = std::clamp(g_mod->glowStrength, 0.0f, 1.5f);
     const float linkDist = std::max(1.0f, g_mod->linkDistance);
     const float linkDistSq = linkDist * linkDist;
     const int maxLinks = std::max(0, g_mod->maxLinks);
@@ -358,48 +367,121 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
         s_tessVertex(tessellator, x1 - camX, y1 - camY, z1 - camZ);
     };
 
+    // Draw a soft glowing disc approximated by radial spokes + rings
+    auto emitGlowDot = [&](float x, float y, float z, float size, float cr, float cg, float cb, float a, float pulse) {
+        const float core = size * (0.35f + 0.15f * pulse);
+        const float mid  = size * (0.85f + 0.25f * pulse);
+        const float outer = size * (1.6f + 0.5f * pulse) * (0.7f + 0.3f * glow);
+
+        // Bright core cross
+        s_tessColor(tessellator, 1.0f, 1.0f, 1.0f, a * 0.95f);
+        emitLine(x - core, y, z, x + core, y, z);
+        emitLine(x, y - core, z, x, y + core, z);
+        emitLine(x - core * 0.7f, y, z - core * 0.7f, x + core * 0.7f, y, z + core * 0.7f);
+        emitLine(x - core * 0.7f, y, z + core * 0.7f, x + core * 0.7f, y, z - core * 0.7f);
+
+        // Mid ring (tinted)
+        s_tessColor(tessellator, cr, cg, cb, a * 0.55f * glow);
+        constexpr int spokes = 8;
+        for (int i = 0; i < spokes; ++i) {
+            const float a0 = (6.2831853f * static_cast<float>(i)) / static_cast<float>(spokes);
+            const float a1 = (6.2831853f * static_cast<float>(i + 1)) / static_cast<float>(spokes);
+            emitLine(x + std::cos(a0) * mid, y + std::sin(a0) * mid * 0.35f, z + std::sin(a0) * mid,
+                     x + std::cos(a1) * mid, y + std::sin(a1) * mid * 0.35f, z + std::sin(a1) * mid);
+        }
+
+        // Soft outer glow
+        s_tessColor(tessellator, cr, cg, cb, a * 0.22f * glow);
+        for (int i = 0; i < spokes; ++i) {
+            const float ang = (6.2831853f * static_cast<float>(i)) / static_cast<float>(spokes);
+            const float cx = std::cos(ang), cz = std::sin(ang);
+            emitLine(x, y, z, x + cx * outer, y, z + cz * outer);
+            emitLine(x, y, z, x, y + std::sin(ang) * outer * 0.55f, z);
+        }
+    };
+
     for (size_t i = 0; i < snapshot.size(); ++i) {
         const auto& p = snapshot[i];
-        float lifeT = std::clamp(p.life / std::max(1.0f, p.maxLife), 0.0f, 1.0f);
-        // Fade in first 10%, fade out last 25%
+        const float lifeT = std::clamp(p.life / std::max(1.0f, p.maxLife), 0.0f, 1.0f);
         float fade = 1.0f;
-        if (lifeT > 0.9f) fade = (1.0f - lifeT) / 0.1f;
-        else if (lifeT < 0.25f) fade = lifeT / 0.25f;
-        float a = opacity * fade;
-        if (p.isFirefly) a *= 0.5f + 0.5f * (0.5f + 0.5f * std::sin(p.phase * 3.0f));
+        if (lifeT > 0.85f) fade = (1.0f - lifeT) / 0.15f;
+        else if (lifeT < 0.15f) fade = lifeT / 0.15f;
+
+        const float pulse = p.isFirefly
+            ? (0.55f + 0.45f * std::sin(p.phase * 2.7f))
+            : (0.85f + 0.15f * std::sin(p.phase));
+
+        float a = opacity * fade * (p.isFirefly ? (0.65f + 0.35f * pulse) : 1.0f);
 
         const float cr = ((p.color >> 16) & 0xFF) / 255.0f;
         const float cg = ((p.color >> 8) & 0xFF) / 255.0f;
         const float cb = (p.color & 0xFF) / 255.0f;
-        s_tessColor(tessellator, cr, cg, cb, a);
 
-        const float s = p.size;
-        // Rotated cross for sparkle
-        const float c = std::cos(p.rot);
-        const float sn = std::sin(p.rot);
-        emitLine(p.x - s * c, p.y, p.z - s * sn, p.x + s * c, p.y, p.z + s * sn);
-        emitLine(p.x - s * sn, p.y - s * 0.6f, p.z + s * c, p.x + s * sn, p.y + s * 0.6f, p.z - s * c);
+        if (p.isFirefly) {
+            // Glowing flying dot
+            emitGlowDot(p.x, p.y, p.z, p.size, cr, cg, cb, a, pulse);
 
-        // Firefly trail
-        if (p.trail.size() > 1) {
-            for (size_t t = 1; t < p.trail.size(); ++t) {
-                const float ta = a * (static_cast<float>(t) / static_cast<float>(p.trail.size()));
-                s_tessColor(tessellator, cr, cg, cb, ta * 0.7f);
-                const auto& a0 = p.trail[t - 1];
-                const auto& a1 = p.trail[t];
-                emitLine(a0.x, a0.y, a0.z, a1.x, a1.y, a1.z);
+            // Smooth trail
+            if (p.trail.size() > 1) {
+                for (size_t t = 1; t < p.trail.size(); ++t) {
+                    const float ta = a * (static_cast<float>(t) / static_cast<float>(p.trail.size())) * 0.55f;
+                    s_tessColor(tessellator, cr, cg, cb, ta);
+                    const auto& a0 = p.trail[t - 1];
+                    const auto& a1 = p.trail[t];
+                    emitLine(a0.x, a0.y, a0.z, a1.x, a1.y, a1.z);
+                }
+            }
+        } else {
+            // Regular ambient sparkle — rotated diamond / star
+            const float s = p.size * (0.7f + 0.3f * pulse);
+            const float c = std::cos(p.rot);
+            const float sn = std::sin(p.rot);
+
+            s_tessColor(tessellator, cr, cg, cb, a);
+            emitLine(p.x - s * c, p.y, p.z - s * sn, p.x + s * c, p.y, p.z + s * sn);
+            emitLine(p.x - s * sn, p.y - s * 0.65f, p.z + s * c,
+                     p.x + s * sn, p.y + s * 0.65f, p.z - s * c);
+
+            // Soft glow halo
+            s_tessColor(tessellator, cr, cg, cb, a * 0.25f * glow);
+            const float hs = s * 1.8f;
+            emitLine(p.x - hs * c, p.y, p.z - hs * sn, p.x + hs * c, p.y, p.z + hs * sn);
+            emitLine(p.x - hs * sn, p.y, p.z + hs * c, p.x + hs * sn, p.y, p.z - hs * c);
+
+            // Mode accents
+            if (g_mod->mode == WorldParticlesModule::Mode::Hearts ||
+                g_mod->mode == WorldParticlesModule::Mode::Bloom) {
+                s_tessColor(tessellator, cr, cg, cb, a * 0.5f);
+                emitLine(p.x, p.y - s * 0.4f, p.z, p.x - s * 0.55f, p.y + s * 0.25f, p.z);
+                emitLine(p.x, p.y - s * 0.4f, p.z, p.x + s * 0.55f, p.y + s * 0.25f, p.z);
+            } else if (g_mod->mode == WorldParticlesModule::Mode::Cube ||
+                       g_mod->mode == WorldParticlesModule::Mode::Pyramid) {
+                s_tessColor(tessellator, cr, cg, cb, a * 0.7f);
+                const float q = s * 0.7f;
+                emitLine(p.x - q, p.y - q, p.z, p.x + q, p.y - q, p.z);
+                emitLine(p.x + q, p.y - q, p.z, p.x + q, p.y + q, p.z);
+                emitLine(p.x + q, p.y + q, p.z, p.x - q, p.y + q, p.z);
+                emitLine(p.x - q, p.y + q, p.z, p.x - q, p.y - q, p.z);
+            } else if (g_mod->mode == WorldParticlesModule::Mode::Snowflake) {
+                s_tessColor(tessellator, cr, cg, cb, a * 0.65f);
+                for (int k = 0; k < 6; ++k) {
+                    const float ang = p.rot + (6.2831853f * static_cast<float>(k)) / 6.0f;
+                    emitLine(p.x, p.y, p.z,
+                             p.x + std::cos(ang) * s, p.y, p.z + std::sin(ang) * s);
+                }
             }
         }
 
-        // Network links to nearby particles
-        if ((g_mod->mode == WorldParticlesModule::Mode::Network || g_mod->mode == WorldParticlesModule::Mode::Multi) && maxLinks > 0) {
+        // Network links
+        if ((g_mod->mode == WorldParticlesModule::Mode::Network ||
+             g_mod->mode == WorldParticlesModule::Mode::Multi) && maxLinks > 0) {
             int links = 0;
             for (size_t j = i + 1; j < snapshot.size() && links < maxLinks; ++j) {
                 const auto& q = snapshot[j];
                 const float dx = p.x - q.x, dy = p.y - q.y, dz = p.z - q.z;
                 const float d2 = dx * dx + dy * dy + dz * dz;
                 if (d2 <= linkDistSq) {
-                    const float la = a * 0.35f * (1.0f - std::sqrt(d2) / linkDist);
+                    const float la = a * 0.28f * (1.0f - std::sqrt(d2) / linkDist);
                     s_tessColor(tessellator, cr, cg, cb, la);
                     emitLine(p.x, p.y, p.z, q.x, q.y, q.z);
                     ++links;
@@ -421,7 +503,7 @@ static void renderLevelHook(void* self, void* screenContext, void* a3) {
 } // namespace
 
 WorldParticlesModule::WorldParticlesModule()
-    : Module("WorldParticles", "SoupVisuals-style ambient particles (stars, fireflies, network, fall/fly/emerge).") {
+    : Module("AmbientParticles", "SoupVisuals-style ambient particles — glowing fireflies, stars, network, bloom.") {
     g_mod = this;
 }
 
@@ -430,8 +512,8 @@ WorldParticlesModule::~WorldParticlesModule() {
 }
 
 void WorldParticlesModule::onInit() {
-    uintptr_t addr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel);
-    if (addr != 0) m_patchTarget = reinterpret_cast<void*>(addr);
+    if (auto addr = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::RenderLevel))
+        m_patchTarget = reinterpret_cast<void*>(addr);
 
     if (auto tb = bedrocktools::memory::resolve(bedrocktools::memory::SignatureId::TessellatorBegin)) {
         m_tessBeginAddr = reinterpret_cast<void*>(tb);
@@ -478,42 +560,36 @@ void WorldParticlesModule::onDisable() {
 
 void WorldParticlesModule::loadConfig(const nlohmann::json& j) {
     Module::loadConfig(j);
-    auto readMode = [&](const char* key, int maxV, int& out) {
-        if (!j.contains(key)) return;
+    auto readChoice = [&](const char* key, int maxV) -> int {
+        if (!j.contains(key)) return -1;
         try {
-            if (j[key].is_number_integer()) out = std::clamp(j[key].get<int>(), 0, maxV);
-            else if (j[key].is_number_float()) out = std::clamp(static_cast<int>(j[key].get<float>()), 0, maxV);
-            else {
-                std::string v = j[key].get<std::string>();
-                const auto c = v.find(',');
-                if (c != std::string::npos) v.resize(c);
-                out = std::clamp(std::stoi(v), 0, maxV);
-            }
-        } catch (...) {}
+            if (j[key].is_number_integer()) return std::clamp(j[key].get<int>(), 0, maxV);
+            if (j[key].is_number_float()) return std::clamp(static_cast<int>(j[key].get<float>()), 0, maxV);
+            std::string v = j[key].get<std::string>();
+            const auto c = v.find(',');
+            if (c != std::string::npos) v.resize(c);
+            return std::clamp(std::stoi(v), 0, maxV);
+        } catch (...) { return -1; }
     };
-    int m = static_cast<int>(mode), p = static_cast<int>(physics);
-    readMode("mode", 12, m);
-    readMode("physics", 2, p);
-    mode = static_cast<Mode>(m);
-    physics = static_cast<Physics>(p);
+    if (int m = readChoice("mode", 12); m >= 0) mode = static_cast<Mode>(m);
+    if (int p = readChoice("physics", 2); p >= 0) physics = static_cast<Physics>(p);
 
-    if (j.contains("density")) {
-        if (j["density"].is_number()) density = std::clamp(static_cast<int>(j["density"].get<float>()), 0, 300);
-    }
+    if (j.contains("density")) density = std::clamp(static_cast<int>(j["density"].get<float>()), 0, 250);
     if (j.contains("spawnRadius")) spawnRadius = std::clamp(j["spawnRadius"].get<float>(), 2.0f, 64.0f);
-    if (j.contains("radius")) spawnRadius = std::clamp(j["radius"].get<float>(), 2.0f, 64.0f); // legacy
+    if (j.contains("radius")) spawnRadius = std::clamp(j["radius"].get<float>(), 2.0f, 64.0f);
     if (j.contains("spawnHeight")) spawnHeight = std::clamp(j["spawnHeight"].get<float>(), 1.0f, 32.0f);
     if (j.contains("particleSize")) particleSize = std::clamp(j["particleSize"].get<float>(), 0.02f, 1.5f);
     if (j.contains("opacity")) opacity = std::clamp(j["opacity"].get<float>(), 0.05f, 1.0f);
     if (j.contains("speed")) speed = std::clamp(j["speed"].get<float>(), 0.1f, 3.0f);
-    if (j.contains("fallSpeed")) speed = std::clamp(j["fallSpeed"].get<float>(), 0.1f, 3.0f); // legacy
+    if (j.contains("fallSpeed")) speed = std::clamp(j["fallSpeed"].get<float>(), 0.1f, 3.0f);
     if (j.contains("colorHex")) colorHex = j["colorHex"].get<std::string>();
     if (j.contains("forceTint")) forceTint = j["forceTint"].get<bool>();
-    if (j.contains("fireflyCount")) fireflyCount = std::clamp(static_cast<int>(j["fireflyCount"].get<float>()), 0, 120);
+    if (j.contains("fireflyCount")) fireflyCount = std::clamp(static_cast<int>(j["fireflyCount"].get<float>()), 0, 100);
     if (j.contains("fireflyScale")) fireflyScale = std::clamp(j["fireflyScale"].get<float>(), 0.05f, 1.5f);
-    if (j.contains("trailLength")) trailLength = std::clamp(static_cast<int>(j["trailLength"].get<float>()), 2, 24);
+    if (j.contains("trailLength")) trailLength = std::clamp(static_cast<int>(j["trailLength"].get<float>()), 3, 32);
     if (j.contains("linkDistance")) linkDistance = std::clamp(j["linkDistance"].get<float>(), 1.0f, 16.0f);
     if (j.contains("maxLinks")) maxLinks = std::clamp(static_cast<int>(j["maxLinks"].get<float>()), 0, 8);
+    if (j.contains("glowStrength")) glowStrength = std::clamp(j["glowStrength"].get<float>(), 0.0f, 1.5f);
 }
 
 void WorldParticlesModule::saveConfig(nlohmann::json& j) {
@@ -533,4 +609,5 @@ void WorldParticlesModule::saveConfig(nlohmann::json& j) {
     j["trailLength"] = trailLength;
     j["linkDistance"] = linkDistance;
     j["maxLinks"] = maxLinks;
+    j["glowStrength"] = glowStrength;
 }

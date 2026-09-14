@@ -7,11 +7,9 @@
 #include <string>
 #include <vector>
 
-// SoupVisuals-style AmbientParticles for BedrockTools.
-// Modes + Fall/Fly/Emerge physics inspired by SoupVisuals AmbientParticles.
+// SoupVisuals AmbientParticles recreation for BedrockTools.
 class WorldParticlesModule : public Module {
 public:
-    // Matches SoupVisuals ambient mode names (subset that works as line sparkles).
     enum class Mode : int {
         Stars = 0,
         Hearts = 1,
@@ -43,23 +41,22 @@ public:
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
-    Mode mode = Mode::Stars;
-    Physics physics = Physics::Fall;
-    int density = 60;           // regular particle count target
-    float spawnRadius = 25.0f;  // Soup default
-    float spawnHeight = 4.0f;   // Soup default
-    float particleSize = 0.15f;
-    float opacity = 0.9f;
+    Mode mode = Mode::Firefly;
+    Physics physics = Physics::Fly;
+    int density = 50;
+    float spawnRadius = 20.0f;
+    float spawnHeight = 5.0f;
+    float particleSize = 0.18f;
+    float opacity = 0.95f;
     float speed = 1.0f;
     std::string colorHex = "#FFFFFFFF";
     bool forceTint = false;
-    // Firefly
-    int fireflyCount = 25;
-    float fireflyScale = 0.2f;
-    int trailLength = 8;
-    // Network
+    int fireflyCount = 30;
+    float fireflyScale = 0.22f;
+    int trailLength = 12;
     float linkDistance = 5.0f;
     int maxLinks = 3;
+    float glowStrength = 0.85f;
 
     struct TrailPoint {
         float x = 0, y = 0, z = 0;
