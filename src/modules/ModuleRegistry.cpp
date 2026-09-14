@@ -18,6 +18,7 @@
 #include "hud/compass.hpp"
 #include "hud/armorhud.hpp"
 #include "hud/potionhud.hpp"
+#include "hud/targethud.hpp"
 #include "player/timechanger.hpp"
 #include "player/autosprint.hpp"
 #include "player/weatherchanger.hpp"
@@ -103,6 +104,7 @@ void registerAllModules() {
     registry.emplace<CompassModule>();
     registry.emplace<ArmorHudModule>();
     registry.emplace<PotionHudModule>();
+    registry.emplace<TargetHudModule>();
     registry.emplace<TimeChangerModule>();
     registry.emplace<WorldTimeModule>();
     registry.emplace<TotemCounterModule>();
