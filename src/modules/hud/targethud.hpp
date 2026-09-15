@@ -2,12 +2,13 @@
 
 #include "../Module.hpp"
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
 
-// SoupVisuals-style TargetHUD for BedrockTools.
+// SoupVisuals-style TargetHUD with skin head, smooth HP + absorption bars.
 class TargetHudModule : public Module {
 public:
     TargetHudModule();
@@ -20,45 +21,51 @@ public:
     void loadConfig(const nlohmann::json& j) override;
     void saveConfig(nlohmann::json& j) override;
 
-    // Called from AttackEvent
     void onAttackTarget(void* actor);
 
-    // HUD editor
     float hudPosX = -1.0f;
     float hudPosY = -1.0f;
     bool isHudModule = true;
 
-    // Appearance
-    int style = 1;              // 0 Default (sharp), 1 Round
     float scale = 1.0f;
-    float backAlpha = 0.85f;
-    float liveTime = 3.5f;      // seconds to keep showing after last hit
-    int animationMode = 2;      // 0 Scale, 1 Fade, 2 Both
-    float animationSpeed = 1.0f;
-    float cardWidth = 160.0f;
-    float cardHeight = 52.0f;
-    float cornerRadius = 10.0f;
-    std::string accentColor = "#55FF55";
-    bool showDistance = true;
-    bool showHealthBar = true;
-    bool showHurtFlash = true;
+    float backAlpha = 0.92f;
+    float liveTime = 4.0f;
+    float deathFadeTime = 1.2f;   // fade after HP hits 0 / entity gone
+    float animationSpeed = 1.2f;
+    float cardWidth = 220.0f;
+    float cardHeight = 64.0f;
+    float cornerRadius = 14.0f;
+    std::string barColor = "#8B5CFF";
+    std::string absorptionColor = "#FFC93A";
+    bool showArmorRow = true;
+    bool showPlayerTag = true;
+    bool showHeads = true;
+    float damagePerHit = 1.0f;    // client estimate until Attribute API exists
 
 private:
     struct TargetState {
-        void* actor = nullptr;
+        void* actorPtr = nullptr;       // only used while still in world (re-validated)
+        std::uintptr_t actorId = 0;
         std::string name = "Unknown";
-        float posX = 0, posY = 0, posZ = 0;
+        std::string kind = "Player";
+        std::string headKey;
+        bool hasHead = false;
         float health = 20.0f;
         float maxHealth = 20.0f;
-        float displayHealth = 20.0f; // smoothed
-        int hurtTime = 0;
+        float absorption = 0.0f;        // gapple layer
+        float displayHealth = 20.0f;
+        float displayAbsorption = 0.0f;
+        float posX = 0, posY = 0, posZ = 0;
         std::chrono::steady_clock::time_point lastHit{};
+        std::chrono::steady_clock::time_point diedAt{};
         bool valid = false;
+        bool dead = false;
+        bool isPlayer = false;
     };
 
     TargetState m_target;
-    float m_anim = 0.0f; // 0 hidden .. 1 fully shown
+    float m_anim = 0.0f;
     mutable std::mutex m_mutex;
 
-    static float calcTextWidth(const std::string& text, float size);
+    static float textWidth(const std::string& text, float size);
 };
